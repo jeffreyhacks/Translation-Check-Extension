@@ -1,0 +1,18 @@
+{
+  "name": "translation-check",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/content.src.js --bundle --minify --format=iife --platform=browser --outfile=content.js && esbuild src/background.src.js --bundle --minify --format=iife --platform=browser --outfile=background.js",
+    "test": "node test/engine.test.mjs && node test/mask.test.mjs && node test/rules.test.mjs && node test/features.mjs && node test/popup.test.mjs",
+    "pretest": "npm run build"
+  },
+  "dependencies": {
+    "tinyld": "^1.3.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0"
+  }
+}
