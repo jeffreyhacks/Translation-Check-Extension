@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Translation Check",
+  "version": "2.0.0",
+  "description": "Checks whether the current page is fully translated into a language you pick, and highlights text that isn't.",
+  "minimum_chrome_version": "114",
+  "permissions": [
+    "activeTab", 
+    "scripting", 
+    "storage", 
+    "sidePanel"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*",
+    "file://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file://*/*.pdf"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": { 
+    "service_worker": "background.js" 
+  },
+  "side_panel": { 
+    "default_path": "panel.html" 
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Check translation",
+    "default_icon": { 
+      "16": "icons/icon16.png", 
+      "48": "icons/icon48.png" 
+    }
+  },
+  "icons": { 
+    "16": "icons/icon16.png", 
+    "48": "icons/icon48.png", 
+    "128": "icons/icon128.png" 
+  }
+}

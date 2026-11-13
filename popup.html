@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="popup.css">
+  <title>Translation Check</title>
+</head>
+<body>
+  <header>
+    <div class="top">
+      <h1>Translation check</h1>
+      <button id="openPanel" hidden title="Keep this open while you browse the page">Side panel</button>
+    </div>
+    <p>Mark text that isn’t in your chosen language.</p>
+  </header>
+
+  <section class="controls">
+    <label class="field">Page should be in
+      <select id="lang"></select>
+    </label>
+    <label class="field">Strictness
+      <select id="mode">
+        <option value="relaxed">Relaxed — assume unclear text is translated</option>
+        <option value="balanced" selected>Balanced — recommended</option>
+        <option value="strict">Strict — list everything unclear</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="attrs" checked> Include placeholders, alt text and tooltips</label>
+    <label class="check"><input type="checkbox" id="unsure"> Also mark text I can’t judge</label>
+    <label class="check"><input type="checkbox" id="related" checked> Accept closely related languages (Spanish/Portuguese, Danish/Norwegian…)</label>
+
+    <details>
+      <summary>More options</summary>
+      <label class="check"><input type="checkbox" id="live" checked> Keep checking as the page changes</label>
+      <label class="check"><input type="checkbox" id="source" checked> Compare with the page’s source-language version (hreflang)</label>
+      <label class="check"><input type="checkbox" id="hints"> Show number and date format hints</label>
+      <label class="check"><input type="checkbox" id="auto"> Check <b id="hostName">this site</b> automatically</label>
+    </details>
+
+    <details>
+      <summary>Never flag these terms</summary>
+      <label class="field">All sites<textarea id="ignoreGlobal" rows="2" placeholder="One per line: product names, model names…"></textarea></label>
+      <label class="field">This site<textarea id="ignoreSite" rows="2"></textarea></label>
+      <div class="row"><button id="impIgnore">Import…</button><button id="expIgnore">Export…</button><input type="file" id="impFile" accept="application/json" hidden></div>
+    </details>
+
+    <div class="row">
+      <button id="scan" class="primary">Check this page</button>
+      <button id="clear">Clear marks</button>
+    </div>
+  </section>
+
+  <p id="status" role="status"></p>
+
+  <section id="result" hidden>
+    <div class="summary">
+      <div class="ring" id="ring"><b id="score">–</b></div>
+      <dl>
+        <div><dt>Translated</dt><dd id="nOk">0</dd></div>
+        <div><dt>Not translated</dt><dd id="nBad" class="bad">0</dd></div>
+        <div><dt>Can’t tell</dt><dd id="nUnsure">0</dd></div>
+      </dl>
+    </div>
+    <p id="meta"></p>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tabBad" aria-selected="true">Not translated <span class="n">0</span></button>
+      <button role="tab" id="tabUnsure" aria-selected="false">Can’t tell <span class="n">0</span></button>
+      <button role="tab" id="tabBug" aria-selected="false" hidden>Broken <span class="n">0</span></button>
+      <button role="tab" id="tabFmt" aria-selected="false" hidden>Format <span class="n">0</span></button>
+    </div>
+    <div class="nav">
+      <button id="prev" title="Previous issue">‹</button>
+      <span id="pos">0 / 0</span>
+      <button id="next" title="Next issue">›</button>
+      <span class="spacer"></span>
+      <button id="expCsv">CSV</button>
+      <button id="expHtml">Report</button>
+    </div>
+    <ul id="list"></ul>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>
