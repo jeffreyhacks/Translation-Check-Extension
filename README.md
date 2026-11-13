@@ -1,8 +1,25 @@
 # Translation Check 2.0
 
-Load this folder in chrome://extensions (Developer mode -> Load unpacked). Needs Chrome 114+.
+A browser extension for localization review and quality assurance.
 
-- `background.js` – service worker; hosts the language model once for the whole browser.
-- `content.js` – small page-side scanner (collect, mask, highlight, report).
-- `popup.html` / `panel.html` + `popup.js` – the popup and the side-panel UI (same code).
-- `src/` – sources. Edit these, then `npm install && npm run build`. `npm test` runs the checks.
+## Installation
+
+1. Open `chrome://extensions` in Google Chrome (Requires Chrome 114+).
+2. Enable **Developer mode** in the top right corner.
+3. Click **Load unpacked** and select this folder.
+
+## Architecture
+
+* **`background.js`** – Service worker; hosts the language model once for the whole browser.
+* **`content.js`** – Page-side scanner (collects, masks, highlights, and reports).
+* **`popup.html` / `panel.html` + `popup.js`** – The extension popup and side-panel UI (shared codebase).
+* **`src/`** – Source files. 
+
+## Development
+
+```bash
+# Install dependencies and build
+npm install && npm run build
+
+# Run automated checks
+npm test
