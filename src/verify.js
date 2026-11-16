@@ -1,10 +1,21 @@
-// Multi-layer verification. The primary model (tinyld + rules) proposes a verdict; two independent
-// detectors — Google's CLD3 (WebAssembly) and franc (trigram profiles) — then cast their own votes.
-// A warning is only trusted when the models don't contradict it; two models that agree on a different
-// language can also promote a "can't tell" to a warning.
+// Multi-layer verification. Three detectors vote independently: tinyld (with the rules around it), Google's CLD3 (WebAssembly) and franc (trigram profiles).
+// Each votes for the target language, for another language, or abstains. A model only abstains when it has no real guess; a guess that is right but
+// not very confident still counts, so the decision is not thrown away. Then the simple rule applies: when two models agree, that decides:
+//   - two read the text as the target language  -> it is translated (a warning is withdrawn, a "can't tell" is cleared);
+//   - two read it as the same other language    -> it is untranslated (a "can't tell" becomes a warning, a warning is confirmed).
+// A confident dissent from the third model, or clearly English wording, stops either conclusion. Short strings are cognate-prone, so there a
+// model's confidence is never treated as strong. Text shaped like a name (see names.js) that the models cannot agree on is a name, not a leftover.
 import { loadModule } from 'cld3-asm/dist/cjs/index.js'; // CommonJS entry: the ESM entry breaks when bundled for browsers
 import { francAll } from 'franc-min';
-import { norm, groupOf, relatedOf } from './engine.js';
+import { norm, groupOf, relatedOf, relabel, englishHits, plausible } from './engine.js';
+import { impossible } from './alphabet.js';
+import { HARD } from './guard.js';
+
+const letters = (t) => (t.match(/\p{L}/gu) || []).length;
+const wordsOf = (t) => (t.match(/\p{L}[\p{L}'’-]*/gu) || []).length;
+const solid = (t) => letters(t) >= 20 && wordsOf(t) >= 3; // long enough for a model's own confidence to mean something
+const ABSTAIN = { vote: 'abstain' };
+const hasAccent = (t) => /[\u00c0-\u024f]/.test(t); // letters English words (almost) never use: é ä ö ü ñ ç ø ł ş ...
 
 // franc speaks ISO 639-3; map to the 2-letter codes used everywhere else. Unmapped codes => the vote abstains.
 const ISO3 = Object.fromEntries(('eng:en spa:es fra:fr deu:de ita:it por:pt nld:nl swe:sv dan:da nob:no nno:no fin:fi pol:pl ces:cs slk:sk hun:hu ron:ro bul:bg hrv:hr ' +
@@ -19,43 +30,60 @@ const cld3Id = () => (idP ||= loadModule({ timeout: 20000 }).then((f) => f.creat
 export function createVerifier(cldFallback = async () => null) {
   const status = { cld3: 'pending', franc: 'ready' };
 
-  async function cld3Vote(text, eq) {
+  // Turns "the model named language l" into a vote. Relatives of the target count for the target (they are accepted on the page anyway);
+  // languages nobody writes pages in, and languages whose letters the text doesn't have, are not a real guess.
+  function place(l, text, eq, strong) {
+    if (eq.target.includes(l)) return { vote: 'target', lang: l, strong };
+    if (eq.related.includes(l)) return { vote: 'target', lang: l, strong: false };
+    if (!plausible(l) || (l !== 'en' && impossible(text, l))) return { ...ABSTAIN, lang: l };
+    if (l === 'en' && !strong && hasAccent(text)) return { ...ABSTAIN, lang: l }; // "Pläne", "Privé", "Görsel" are not English, whatever a model says
+    return { vote: 'other', lang: l, strong };
+  }
+
+  async function cld3Vote(text, eq, isSolid) {
     const id = await cld3Id();
-    let lang, ok;
+    let lang, conf, reliable;
     if (id) {
       status.cld3 = 'wasm';
       const r = id.findLanguage(text.slice(0, 1000));
-      lang = r && r.language; ok = r && lang !== 'und' && (r.is_reliable || r.probability >= 0.8);
+      lang = r && r.language; conf = r ? r.probability : 0; reliable = !!(r && r.is_reliable);
     } else {
       const d = await cldFallback(text.slice(0, 1000));
       status.cld3 = d ? 'chrome' : 'off';
       const top = d && d.languages && d.languages[0];
-      lang = top && top.language; ok = d && d.isReliable && top && lang !== 'und';
+      lang = top && top.language; conf = top ? (top.percentage || 0) / 100 : 0; reliable = !!(d && d.isReliable);
     }
-    if (!ok || !lang) return { vote: 'abstain' };
-    const l = norm(lang);
-    if (eq.target.includes(l)) return { vote: 'target', lang: l };
-    if (eq.related.includes(l)) return { vote: 'abstain', lang: l }; // close relatives never count against the page
-    return { vote: 'other', lang: l };
+    if (!lang || lang === 'und' || conf < 0.3) return ABSTAIN;
+    return place(norm(lang), text, eq, isSolid && (reliable || conf >= 0.8));
   }
 
-  function francVote(text, eq) {
-    const letters = (text.match(/\p{L}/gu) || []).length;
-    if (letters < 6) return { vote: 'abstain' };
-    const all = francAll(text, { minLength: 6 });
-    if (!all.length || all[0][0] === 'und') return { vote: 'abstain' };
-    const short = letters < 14; // franc is weak on very short strings: demand a much bigger lead
+  function francVote(text, eq, isSolid) {
+    const lt = letters(text);
+    if (lt < 3) return ABSTAIN;
+    const all = francAll(text, { minLength: 3 });
+    if (!all.length || all[0][0] === 'und') return ABSTAIN;
+    const short = lt < 14; // franc is weak on very short strings: demand a bigger lead
     const langOf = (code) => ISO3[code];
     const top = langOf(all[0][0]);
-    if (!top) return { vote: 'abstain' };
+    if (!top) return ABSTAIN;
     const best = (pred) => all.reduce((m, [c, sc]) => (pred(langOf(c)) ? Math.max(m, sc) : m), 0);
     const near = [...eq.target, ...eq.related];
-    if (eq.target.includes(top)) { // lead over the best non-target language
-      return 1 - best((l) => l && !near.includes(l)) >= (short ? 0.25 : 0.08) ? { vote: 'target', lang: top } : { vote: 'abstain' };
+    if (eq.target.includes(top) || eq.related.includes(top)) { // lead over the best language that is neither the target nor a relative
+      const lead = 1 - best((l) => l && !near.includes(l));
+      return lead >= (short ? 0.15 : 0.04) ? place(top, text, eq, isSolid && lead >= 0.15) : { ...ABSTAIN, lang: top };
     }
-    if (eq.related.includes(top)) return { vote: 'abstain', lang: top };
-    // another language is on top: how far is the target (or its relatives) behind?
-    return 1 - best((l) => near.includes(l)) >= (short ? 0.4 : 0.15) ? { vote: 'other', lang: top } : { vote: 'abstain' };
+    const behind = 1 - best((l) => near.includes(l)); // how far the target (or its relatives) is behind
+    return behind >= (short ? 0.3 : 0.1) ? place(top, text, eq, isSolid && behind >= 0.3) : { ...ABSTAIN, lang: top };
+  }
+
+  // tinyld's own opinion. For a warning that is the engine's verdict (tinyld + the rules around it); for a "can't tell" it is tinyld's head-to-head
+  // scores between the target and the best other candidate, which the engine could not call but which still lean one way.
+  function tinyVote(v, eq, isSolid, text) {
+    if (v.v === 'bad') return v.detected === 'en' && !isSolid && hasAccent(text) ? { ...ABSTAIN, lang: 'en' } : { vote: 'other', lang: v.detected, strong: isSolid };
+    const { sT = 0, sO = 0, other } = v;
+    if (sT >= 0.15 && sT >= sO) return { vote: 'target', strong: false };
+    if (sO >= 0.2 && sO > sT && other) return place(norm(other), '', eq, false);
+    return ABSTAIN;
   }
 
   const majority = (langs, fallback) => {
@@ -65,26 +93,43 @@ export function createVerifier(cldFallback = async () => null) {
     return best && (best[1] > 1 || !fallback) ? best[0] : fallback;
   };
 
-  /** Returns the verdict, possibly overturned/confirmed/promoted, annotated with `votes`. */
-  async function verify(text, lang, v, related = true) {
+  /** Returns the verdict, possibly overturned / cleared / confirmed / promoted, annotated with `votes`. */
+  async function verify(text, lang, v, related = true, opts = {}) {
     if (v.v !== 'bad' && v.v !== 'unsure') return v;
     const eq = { target: groupOf(lang), related: related ? relatedOf(lang) : [] };
-    const [c, f] = [await cld3Vote(text, eq), francVote(text, eq)];
-    const tiny = v.v === 'bad' ? { vote: 'other', lang: v.detected } : { vote: 'abstain' };
-    const votes = { tinyld: tiny.vote, cld3: c.vote, franc: f.vote };
+    const isSolid = solid(text);
+    const tiny = tinyVote(v, eq, isSolid, text);
+    const c = await cld3Vote(text, eq, isSolid), f = francVote(text, eq, isSolid);
     const all = [tiny, c, f];
-    const against = all.filter((x) => x.vote === 'other'), forTarget = all.filter((x) => x.vote === 'target');
+    const votes = { tinyld: tiny.vote, cld3: c.vote, franc: f.vote };
+    const forTarget = all.filter((x) => x.vote === 'target'), against = all.filter((x) => x.vote === 'other');
+    // a confident vote the other way stops "two models agree" from deciding
+    const blocked = (side) => all.some((x) => x.strong && x.vote !== 'abstain' && x.vote !== side);
+    const words = text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
+    const en = englishHits(text, lang);
+    const englishWording = lang !== 'en' && en.strong >= 1 && en.own === 0; // clearly English words and none of the target language's own
 
+    const tally = {};
+    for (const x of against) tally[x.lang] = (tally[x.lang] || 0) + 1;
+    const [lead, n = 0] = Object.entries(tally).sort((a, b) => b[1] - a[1])[0] || [];
+    const agree = n >= 2 ? { lang: lead, n } : null; // two models independently name the same other language
+    const hard = v.v === 'bad' && HARD.test(v.reason || '');
+
+    if (forTarget.length >= 2 && !englishWording && !blocked('target') && !hard) {
+      return { v: 'ok', reason: 'Two language models read this as the target language', votes, confirmed: true, via: 'verify' };
+    }
+    // Shaped like a name and the models cannot agree on any one language: that is what names look like to a detector (every model guesses something else)
+    // (an English vote on a capitalised phrase of two words or more leans "English label", not "name")
+    const leansEnglish = against.some((x) => x.lang === 'en') && wordsOf(text) >= 2;
+    if (opts.shape && wordsOf(text) >= 2 && !agree && !forTarget.length && !hard && !leansEnglish) return { v: 'name', reason: 'Looks like a name', votes, via: 'verify' };
     if (v.v === 'bad') {
-      // Two independent models read it as the target language: the warning is probably wrong. (A single dissenting vote is not enough.)
-      if (forTarget.length >= 2) {
-        return { v: 'unsure', reason: 'The language models disagree', votes, via: 'verify' };
-      }
-      return { ...v, detected: majority(against.map((x) => x.lang), v.detected), votes, confirmed: against.length >= 2 };
+      if (forTarget.length >= 2) return { v: 'unsure', reason: 'The language models disagree', votes, via: 'verify' }; // rules or a confident model still say otherwise
+      const guess = majority(against.map((x) => x.lang), v.detected);
+      return { ...v, detected: relabel(words, guess), votes, confirmed: !!agree, ...(agree ? { agree } : {}) }; // function-word evidence settles the label
     }
     // "can't tell": two models that independently agree on the same other language make it a warning
-    if (c.vote === 'other' && f.vote === 'other' && c.lang === f.lang) {
-      return { v: 'bad', detected: c.lang, reason: 'CLD3 and franc both read this as another language', votes, confirmed: true, via: 'verify' };
+    if (agree && letters(text) >= 10 && !blocked('other')) {
+      return { v: 'bad', detected: relabel(words, lead), reason: 'Two language models read this as another language', votes, confirmed: true, agree, via: 'verify' };
     }
     return { ...v, votes };
   }

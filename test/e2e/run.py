@@ -6,7 +6,9 @@ SHOTS = ROOT / 'test' / 'e2e' / 'shots'; SHOTS.mkdir(exist_ok=True)
 os.chdir(SITE)
 class Q(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
-socketserver.TCPServer.allow_reuse_address = True; httpd = socketserver.TCPServer(('127.0.0.1', 8791), Q); threading.Thread(target=httpd.serve_forever, daemon=True).start()
+# threaded: Chromium keeps idle sockets open, which would block a single-threaded server
+socketserver.ThreadingTCPServer.allow_reuse_address = True; socketserver.ThreadingTCPServer.daemon_threads = True
+httpd = socketserver.ThreadingTCPServer(('127.0.0.1', 8791), Q); threading.Thread(target=httpd.serve_forever, daemon=True).start()
 # Test copy of the extension. The ONLY difference from the real one: host permissions for the local test server,
 # which stand in for the user's toolbar click ("activeTab"); a headless browser can't click the toolbar.
 EXT = tempfile.mkdtemp(prefix='tc-ext-')
@@ -23,15 +25,19 @@ const _q = chrome.tabs.query.bind(chrome.tabs);
 chrome.tabs.query = async (q) => (q && q.active && q.currentWindow) ? (await _q({})).filter((x) => x.url && x.url.startsWith(window.__T)) : _q(q);
 """
 with sync_playwright() as p:
-    ctx = p.chromium.launch_persistent_context(tempfile.mkdtemp(prefix='tc-profile-'), executable_path=os.environ.get('CHROME') or p.chromium.executable_path, headless=False,
-        args=['--headless=new', '--no-sandbox', f'--disable-extensions-except={EXT}', f'--load-extension={EXT}'], viewport={'width': 1100, 'height': 760})
-    sw = None
-    for _ in range(60):
-        if ctx.service_workers: sw = ctx.service_workers[0]; break
-        time.sleep(0.2)
+    def launch():                                          # Chromium occasionally starts without loading the extension in this sandbox: relaunch instead of failing
+        for attempt in range(4):
+            c = p.chromium.launch_persistent_context(tempfile.mkdtemp(prefix='tc-profile-'), executable_path=os.environ.get('CHROME') or p.chromium.executable_path, headless=False,
+                args=['--headless=new', '--no-sandbox', f'--disable-extensions-except={EXT}', f'--load-extension={EXT}'], viewport={'width': 1100, 'height': 760})
+            for _ in range(60):
+                if c.service_workers: return c, c.service_workers[0]
+                time.sleep(0.2)
+            print(f'(extension did not start on launch {attempt + 1}, relaunching)'); c.close()
+        raise SystemExit('extension never started')
+    ctx, sw = launch()
     ext_id = sw.url.split('/')[2]
     def popup_for(prefix, file='popup.html'):
-        pg = ctx.new_page(); pg.add_init_script(INIT % prefix); pg.goto(f'chrome-extension://{ext_id}/{file}'); pg.wait_for_selector('#lang'); time.sleep(0.4); return pg
+        pg = ctx.new_page(); pg.add_init_script(INIT % prefix); pg.goto(f'chrome-extension://{ext_id}/{file}'); pg.wait_for_selector('#langInput'); time.sleep(0.4); return pg
     def wait_idle(pg, timeout=90000, need_result=True):
         time.sleep(0.6)                                   # let the click start the scan (button disables while it runs)
         end = time.time() + timeout / 1000
@@ -41,8 +47,9 @@ with sync_playwright() as p:
         raise TimeoutError('scan did not finish')
     def run(pg, timeout=90000):
         pg.click('#scan'); time.sleep(0.2); wait_idle(pg, timeout)
-    def set_lang(pg, v):
-        pg.select_option('#lang', v); time.sleep(0.2)
+    QUERY = {'en': 'english', 'de': 'deutsch', 'auto': 'own', 'es': 'espanol'}
+    def set_lang(pg, v):                                   # the real picker: click, type, Enter
+        pg.click('#langInput'); pg.fill('#langInput', QUERY[v]); pg.keyboard.press('Enter'); time.sleep(0.3)
     def chips(pg): return pg.eval_on_selector_all('#chips .chip', 'els => els.map(e => e.textContent)')
     def rows(pg): return pg.eval_on_selector_all('#list li', 'els => els.map(e => e.innerText.replace(/\\s+/g," "))')
 
@@ -52,7 +59,7 @@ with sync_playwright() as p:
     run(pop)
     st = pop.inner_text('#status')
     t('e2e: scan of a real page completes without error', pop.is_visible('#result') and not st, st)
-    t('e2e: "auto" resolved to the page language (German)', 'de' in chips(pop)[0], chips(pop))
+    t('e2e: "auto" resolved to the page language (German)', 'German' in chips(pop)[0], chips(pop))
     cx = ' | '.join(chips(pop))
     t('e2e: all three models active — CLD3 WebAssembly loads under the real extension security policy', '3 models' in cx, cx)
     bad = pop.eval_on_selector_all('#tabBad .n', 'e=>e[0].textContent')
@@ -66,24 +73,24 @@ with sync_playwright() as p:
     pop.click('#tabBug'); br = rows(pop)
     t('e2e: the leaked translation key is under "Broken"', any('checkout.button.save' in x for x in br), br)
     pop.click('#tabBad')
-    hl = de.evaluate("[...['tc-bad','tc-bug','tc-focus']].map(k => CSS.highlights.has(k)).join()")
+    hl = de.evaluate("['bad','bug'].map(s => [...CSS.highlights.keys()].some(k => new RegExp('^tc-[a-z0-9]{6}-' + s + '$').test(k))).join()")
     t('e2e: real CSS highlights are registered on the page', hl.startswith('true,true'), hl)
     pop.screenshot(path=str(SHOTS) + '/popup-de-ok.png')
     de.screenshot(path=str(SHOTS) + '/page-de-highlights.png')
     # navigate with next, check page reacts
     pop.click('#next'); time.sleep(0.5)
-    t('e2e: "next" focuses an issue on the page (focus highlight)', de.evaluate("CSS.highlights.has('tc-focus')"))
+    t('e2e: "next" focuses an issue on the page (focus highlight)', de.evaluate("[...CSS.highlights.keys()].some(k => /^tc-[a-z0-9]{6}-focus$/.test(k))"))
     # ---------- 2. wrong target -> banner ----------
     set_lang(pop, 'en'); run(pop)
     t('e2e: wrong target (English on a German page) shows the short banner', pop.is_visible('#mismatch') and 'German' in pop.inner_text('#mismatchText'), pop.inner_text('#result')[:200])
     pop.screenshot(path=str(SHOTS) + '/popup-de-wrong-target.png')
     pop.click('#mismatchFix'); time.sleep(0.3); wait_idle(pop, 60000, False)
-    t('e2e: one click on the banner switches to German and re-checks', pop.input_value('#lang') == 'de' and pop.is_hidden('#mismatch'), pop.input_value('#lang'))
+    t('e2e: one click on the banner switches to German and re-checks', pop.input_value('#langInput').startswith('German') and pop.is_hidden('#mismatch'), pop.input_value('#langInput'))
     set_lang(pop, 'auto')
     # ---------- 3. confirmed-only + ignore list ----------
-    pop.click('#settingsBtn'); pop.click('label.sw:has(#confirmed)'); run(pop)
+    pop.click('#settingsBtn'); pop.click('label.opt:has(#confirmed)'); run(pop)
     t('e2e: "confirmed only" still reports the clear English leftovers', any('best sellers' in x for x in rows(pop)), rows(pop))
-    pop.click('label.sw:has(#confirmed)')
+    pop.click('label.opt:has(#confirmed)')
     pop.screenshot(path=str(SHOTS) + '/popup-settings.png')
     pop.click('#settingsBtn')
     # ignore button
@@ -92,6 +99,17 @@ with sync_playwright() as p:
         first = pop.locator('#list li').first.inner_text().replace('\n', ' ')
         pop.locator('#list .ignore-btn').first.click(); time.sleep(0.3); wait_idle(pop, 60000, False); time.sleep(0.4)
         t('e2e: Ignore removes that text on the re-check', pop.locator('#list .ignore-btn').count() < n_before or first not in ' '.join(rows(pop)))
+    # ---------- reported false positives, in the real extension ----------
+    frp = ctx.new_page(); frp.goto(B + '/fr.html'); frp.bring_to_front()
+    pf = popup_for(B + '/fr.html'); run(pf)
+    fr_rows = ' '.join(rows(pf))
+    t('e2e: French page — "Active", "Archive", "Active archive", "Archives", "Message" are not untranslated (source compare on)', pf.is_visible('#result') and pf.inner_text('#score') == '100%' and not any(w in fr_rows for w in ['Active archive', 'Archives']), pf.inner_text('#score') + ' ' + fr_rows[:200])
+    t('e2e: French page — language switcher names (English, Turkish, German) are skipped', 'Turkish' not in fr_rows and 'German' not in fr_rows, fr_rows[:200])
+    de2 = ctx.new_page(); de2.goto(B + '/de2.html'); de2.bring_to_front()
+    pg2 = popup_for(B + '/de2.html'); run(pg2)
+    r2 = ' '.join(rows(pg2))
+    t('e2e: German "Ändert Menüs…" text is NOT labelled Turkish', 'Ändert' not in r2, r2[:250])
+    t('e2e: genuine Turkish text on the German page IS still flagged', 'Sepete ekle' in r2 or 'alışverişe' in r2, r2[:250])
     # ---------- 4. Spanish page, wrong data + live updates ----------
     es = ctx.new_page(); es.goto(B + '/es.html'); es.bring_to_front()
     pop2 = popup_for(B + '/es.html'); run(pop2)

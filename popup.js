@@ -14,6 +14,7 @@ const ICON = {
   doc: '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>',
   link: '<svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
   skip: '<svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
+  user: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-4 3-6 7-6s7 2 7 6"/></svg>',
   check: '<svg class="check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>',
 };
 
@@ -70,17 +71,18 @@ function renderChips() {
   const box = $('#chips');
   box.replaceChildren();
   const { stats } = result, src = result.source || {};
-  box.append(chip(ICON.globe, result.lang, `Checked for ${nameOf(result.lang)}${result.requested === 'auto' ? ' (the page’s own language)' : ''}`));
+  box.append(chip(ICON.globe, nameOf(result.lang), `Checked for ${nameOf(result.lang)}${result.requested === 'auto' ? ' (the page’s own language)' : ''}`));
   if (result.kind === 'pdf') box.append(chip(ICON.doc, `PDF · ${src.pages} p.`, 'PDF document'));
   const m = result.models;
-  if (result.models && $('#verify').checked) {
-    const n = 1 + (m.cld3 && m.cld3 !== 'off' ? 1 : 0) + 1;
+  if (m && $('#verify').checked) {
+    const n = 2 + (m.cld3 && m.cld3 !== 'off' ? 1 : 0);
     box.append(chip(ICON.shield, `${n} models`, `Warnings double-checked by tinyld${m.cld3 === 'wasm' ? ', CLD3' : m.cld3 === 'chrome' ? ', Chrome’s CLD' : ''} and franc`));
   }
-  if (result.live) box.append(chip('', 'live', 'Updating as the page changes', 'live'));
-  if (src.status === 'used') box.append(chip(ICON.link, src.lang && src.lang !== 'x-default' ? src.lang : 'source', 'Compared with the source-language version of this page'));
-  if (stats.ignoredN) box.append(chip(ICON.skip, String(stats.ignoredN), `${stats.ignoredN} numbers, times, codes and names skipped`));
-  if (stats.assumedN) box.append(chip('', `${stats.assumedN} assumed`, 'Unclear short strings assumed translated because the rest is'));
+  if (result.live) box.append(chip('', 'Live', 'Updating as the page changes', 'live'));
+  if (src.status === 'used') box.append(chip(ICON.link, `Source: ${src.lang && src.lang !== 'x-default' ? nameOf(src.lang.split('-')[0]) : 'default'}`, 'Compared with the source-language version of this page'));
+  if (stats.ignoredN) box.append(chip(ICON.skip, `${stats.ignoredN} skipped`, `${stats.ignoredN} numbers, times, codes, names and language names skipped`));
+  if (stats.nameN) box.append(chip(ICON.user, `${stats.nameN} ${stats.nameN === 1 ? 'name' : 'names'}`, 'People, places and brands read the same in every language, so they were left alone'));
+  if (stats.assumedN) box.append(chip('', `${stats.assumedN} assumed`, 'Unclear short strings assumed translated because the rest of the page is'));
 }
 
 function render() {
@@ -102,7 +104,7 @@ function render() {
     const declared = (result.pageLang || '').toLowerCase().split('-')[0] === fix;
     $('#mismatchText').textContent = `Mostly ${nameOf(fix)}${declared ? ' — the page’s own language' : ''}. Wrong target?`;
     $('#mismatchFix').textContent = `Check for ${nameOf(fix)}`;
-    $('#mismatchFix').onclick = () => { $('#lang').value = fix; save().then(runScan); };
+    $('#mismatchFix').onclick = () => { setLang(fix); save().then(() => runScan()); };
   }
 
   const counts = { bad: stats.badN, unsure: stats.unsureN, bug: stats.bugN, fmt: stats.fmtN };
@@ -134,13 +136,18 @@ function render() {
     if (i.kind === 'pdf') meta.append(el('span', 'tag', `p.${i.page}${i.pages && i.pages.length > 1 ? ` +${i.pages.length - 1}` : ''}`));
     if (i.kind === 'attr') meta.append(el('span', 'tag', i.attr));
     if (i.votes) { // how the three models voted: red = other language, green = target, grey = abstained
+      const agreeBox = el('span', 'agree');
       const pips = el('span', 'pips' + (i.confirmed ? ' confirmed' : ''));
       pips.title = `tinyld: ${i.votes.tinyld} · CLD3: ${i.votes.cld3} · franc: ${i.votes.franc}`;
       for (const k of ['tinyld', 'cld3', 'franc']) pips.append(el('i', 'pip ' + i.votes[k]));
       if (i.confirmed) pips.insertAdjacentHTML('beforeend', ICON.check);
-      meta.append(pips);
+      const n = ['tinyld', 'cld3', 'franc'].filter((k) => i.votes[k] === 'other').length;
+      agreeBox.append(pips, el('span', '', `${n}/3`));
+      agreeBox.style.marginLeft = 'auto';
+      meta.append(agreeBox);
     }
     b.append(meta);
+    if (i.reason) b.append(el('span', 'why', i.reason));
     b.title = i.reason || 'Too short or ambiguous to judge';
     b.addEventListener('click', () => { cursor = idx; focusRow(i); render(); });
     li.append(b);
@@ -174,6 +181,57 @@ for (const [k, sel] of Object.entries(VIEWS)) $(sel).onclick = () => { view = k;
 $('#prev').onclick = () => step(-1);
 $('#next').onclick = () => step(1);
 
+// ---------- Searchable language picker ----------
+const fold = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase(); // "espanol" finds "español"
+const picker = (() => {
+  const input = $('#langInput'), list = $('#langList'), sel = $('#lang');
+  const items = [...sel.options].map((o) => ({ value: o.value, label: o.textContent, hay: fold(`${o.textContent} ${o.value}${o.value === 'auto' ? ' auto page own declared' : ''}`) }));
+  let shown = [], active = -1, open = false;
+  const sync = () => { input.value = items.find((i) => i.value === sel.value)?.label || ''; };
+  function filter(q) {
+    const toks = fold(q).split(/\s+/).filter(Boolean);
+    if (!toks.length) return items;
+    const rank = (it) => { const l = fold(it.label); return l.startsWith(toks[0]) ? 0 : l.split(/[\s(]+/).some((w) => w.startsWith(toks[0])) ? 1 : 2; };
+    return items.filter((it) => toks.every((t) => it.hay.includes(t))).sort((a, b) => rank(a) - rank(b));
+  }
+  function setActive(i) {
+    active = i;
+    [...list.children].forEach((li, k) => li.classList.toggle('active', k === i));
+    const cur = list.children[i];
+    if (cur) { input.setAttribute('aria-activedescendant', cur.id); cur.scrollIntoView({ block: 'nearest' }); } else input.removeAttribute('aria-activedescendant');
+  }
+  function draw(q) {
+    shown = filter(q);
+    list.replaceChildren();
+    if (!shown.length) { list.append(el('li', 'none', 'No matching language')); setActive(-1); return; }
+    shown.forEach((it, i) => {
+      const li = el('li', '', it.label);
+      li.id = 'lang-opt-' + i; li.dataset.value = it.value;
+      li.setAttribute('role', 'option'); li.setAttribute('aria-selected', String(it.value === sel.value));
+      list.append(li);
+    });
+    setActive(q.trim() ? 0 : Math.max(shown.findIndex((it) => it.value === sel.value), 0));
+  }
+  function show() { if (open) return; open = true; list.hidden = false; input.setAttribute('aria-expanded', 'true'); document.body.classList.add('picking'); draw(''); }
+  function hide() { if (!open) return; open = false; list.hidden = true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); document.body.classList.remove('picking'); sync(); }
+  function choose(v) { const changed = sel.value !== v; sel.value = v; hide(); if (changed) sel.dispatchEvent(new Event('change')); }
+  input.addEventListener('focus', () => { show(); input.select(); });
+  input.addEventListener('click', show);
+  input.addEventListener('input', () => { show(); draw(input.value); });
+  input.addEventListener('blur', hide);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (!open) show(); else setActive(Math.min(active + 1, shown.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (open) setActive(Math.max(active - 1, 0)); }
+    else if (e.key === 'Enter') { if (open && shown[active]) { e.preventDefault(); choose(shown[active].value); } }
+    else if (e.key === 'Escape') { if (open) { e.preventDefault(); e.stopPropagation(); hide(); } }
+    else if (e.key === 'Tab') hide();
+  });
+  list.addEventListener('mousedown', (e) => { e.preventDefault(); const li = e.target.closest('li[data-value]'); if (li) choose(li.dataset.value); });
+  $('#langBox .chev').addEventListener('mousedown', (e) => { e.preventDefault(); if (open) hide(); else { input.focus(); show(); } });
+  return { sync };
+})();
+function setLang(v) { $('#lang').value = v; picker.sync(); }
+
 // ---------- Scan (web page or PDF) ----------
 const loadScript = (src) => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => no(new Error('Could not load ' + src)); document.head.append(s); });
 
@@ -203,7 +261,7 @@ async function runPdf() {
   return res;
 }
 
-async function runScan() {
+async function runScan({ keepView = false } = {}) {
   const btn = $('#scan');
   btn.disabled = true;
   setStatus('Checking…');
@@ -212,7 +270,7 @@ async function runScan() {
     if (isPdf) res = await runPdf();
     else { await ensureInjected(); res = await send({ type: 'scan', ...options() }); }
     if (res?.error) throw new Error(res.error);
-    result = res; view = 'bad'; cursor = -1;
+    result = res; view = keepView ? view : 'bad'; cursor = -1; // after Ignore the person stays on the list they were working in
     setStatus('');
     render();
   } catch (e) {
@@ -223,10 +281,13 @@ async function runScan() {
       : m, true);
   } finally { btn.disabled = false; }
 }
-$('#scan').onclick = runScan;
+$('#scan').onclick = () => runScan();
 $('#clear').onclick = async () => { if (!isPdf) { try { await send({ type: 'clear' }); } catch {} } result = null; render(); setStatus(''); };
 
 // ---------- Settings drawer ----------
+const MODE_HINT = { relaxed: 'Assumes unclear text is translated. Fewest warnings.', balanced: 'Assumes very short unclear text is translated when the rest of the page is.', strict: 'Lists everything unclear. Most warnings.' };
+const showModeHint = () => { $('#modeHint').textContent = MODE_HINT[mode()]; };
+document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', showModeHint));
 $('#settingsBtn').onclick = () => { const open = $('#settings').hidden; $('#settings').hidden = !open; $('#settingsBtn').setAttribute('aria-expanded', open); };
 
 // ---------- Never-flag lists (this site + all sites), import / export ----------
@@ -235,7 +296,7 @@ async function addIgnore(term) {
   if (!list.some((x) => x.toLowerCase() === term.toLowerCase())) list.push(term);
   syncIgnoreBoxes();
   await save();
-  runScan();
+  runScan({ keepView: true });
 }
 function syncIgnoreBoxes() {
   $('#ignoreGlobal').value = ign.global.join('\n');
@@ -298,21 +359,28 @@ $('#expHtml').onclick = async () => {
 };
 
 // ---------- Auto-check a site (optional permission requested only for that site) ----------
+// Chrome's permission prompt can close this popup, so the choice is saved first and the background worker registers the page script
+// once the permission arrives. Only origins that the manifest lists as optional can be requested: one per scheme, never "*://".
+const hostOrigins = (schemes) => schemes.map((sc) => `${sc}://${host}/*`);
 $('#auto').addEventListener('change', async (e) => {
-  const on = e.target.checked, id = 'auto-' + host, origins = [`*://${host}/*`];
+  const on = e.target.checked, before = [...autoSites];
   try {
     if (on) {
-      if (!(await api.permissions.request({ origins }))) { e.target.checked = false; return; }
-      try { await api.scripting.unregisterContentScripts({ ids: [id] }); } catch {}
-      await api.scripting.registerContentScripts([{ id, matches: origins, js: ['content.js'], runAt: 'document_idle', persistAcrossSessions: true }]);
+      const scheme = tabUrl.split(':')[0];
+      if (!host || !/^https?$/.test(scheme)) throw new Error('this page type can’t be checked automatically');
       autoSites = [...new Set([...autoSites, host])];
+      await save();
+      if (!(await api.permissions.request({ origins: hostOrigins([scheme]) }))) { autoSites = before; await save(); e.target.checked = false; return; }
     } else {
-      try { await api.scripting.unregisterContentScripts({ ids: [id] }); } catch {}
-      try { await api.permissions.remove({ origins }); } catch {}
       autoSites = autoSites.filter((h) => h !== host);
+      await save();
+      for (const o of hostOrigins(['http', 'https'])) { try { await api.permissions.remove({ origins: [o] }); } catch {} }
     }
-    await save();
-  } catch (err) { e.target.checked = !on; setStatus('Could not change auto-check: ' + (err.message || err), true); }
+    try { await api.runtime.sendMessage({ type: 'tc-sync-auto' }); } catch {}
+  } catch (err) {
+    autoSites = before; try { await save(); } catch {}
+    e.target.checked = !on; setStatus('Could not change auto-check: ' + (err.message || err), true);
+  }
 });
 
 for (const id of ['lang', 'attrs', 'unsure', 'related', 'verify', 'confirmed', 'live', 'source', 'hints']) $('#' + id).addEventListener('change', save);
@@ -330,14 +398,16 @@ async function refreshTab() {
   $('#scanIcon').innerHTML = isPdf ? '<path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M14 3v4h4" fill="none" stroke="currentColor" stroke-width="1.8"/>' : '<path d="M7 5l12 7-12 7z"/>';
   $('#hostName').textContent = host || 'site';
   $('#auto').disabled = !/^https?:/.test(tabUrl) || isPdf;
-  $('#auto').checked = !!host && autoSites.includes(host);
+  let allowed = true;
+  try { if (/^https?:/.test(tabUrl)) allowed = await api.permissions.contains({ origins: hostOrigins([tabUrl.split(':')[0]]) }); } catch {}
+  $('#auto').checked = !!host && autoSites.includes(host) && allowed;
   $('#ignoreSite').disabled = !host;
   syncIgnoreBoxes();
   result = null; cursor = -1; render();
   if (isPdf) return; // PDFs are checked on demand
   try { // restore results if this page was already checked
     const s = await send({ type: 'status' });
-    if (s?.result) { result = s.result; $('#lang').value = result.requested || result.lang; render(); }
+    if (s?.result) { result = s.result; setLang(result.requested || result.lang); render(); }
   } catch {}
 }
 
@@ -358,8 +428,9 @@ if (api.sidePanel && !IS_PANEL) {
   autoSites = d.autoSites || [];
   ign = d.ignore || { global: d.opts?.ignore || [], sites: {} };
   const o = d.opts || {};
-  $('#lang').value = o.lang || 'auto';
+  setLang(o.lang || 'auto');
   const m = document.querySelector(`input[name=mode][value=${o.mode || 'balanced'}]`); if (m) m.checked = true;
   for (const [k, id] of [['attrs', 'attrs'], ['unsure', 'unsure'], ['related', 'related'], ['verify', 'verify'], ['confirmedOnly', 'confirmed'], ['live', 'live'], ['source', 'source'], ['hints', 'hints']]) if (k in o) $('#' + id).checked = !!o[k];
+  showModeHint();
   await refreshTab();
 })();

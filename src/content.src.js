@@ -13,7 +13,12 @@ import { detectBug, formatHints } from './rules.js';
   const SKIP_SEL = 'script,style,noscript,code,pre,kbd,samp,textarea,svg,math,template,iframe,canvas';
   const NO_TRANSLATE = '[translate="no"],.notranslate,[contenteditable=""],[contenteditable="true"]';
   const URLISH = /^(https?:\/\/|www\.)\S+$|^\S+@\S+\.\S+$/i;
-  const MAX_ITEMS = 6000, STYLE_ID = 'tc-style', KEYS = ['tc-bad', 'tc-unsure', 'tc-bug', 'tc-fmt', 'tc-focus'];
+  const MAX_ITEMS = 6000;
+  // Every copy of this script marks the page under its own private names. A copy from before an extension update keeps running in tabs that
+  // were not reloaded and its marks outlive it, so they must never share names with the current check (see purgeForeign).
+  const NS = 'tc-' + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+  const K = { bad: NS + '-bad', unsure: NS + '-unsure', bug: NS + '-bug', fmt: NS + '-fmt', focus: NS + '-focus' };
+  const MARK_KEY = /^tc-(?:[a-z0-9]{6}-)?(?:bad|unsure|bug|fmt|focus)$/; // names any version of this extension has used
   const RANK = { fmt: 1, unsure: 2, bad: 3, bug: 4 };
 
   const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -159,12 +164,13 @@ import { detectBug, formatHints } from './rules.js';
 
   // ---------- Source-language comparison (hreflang alternates, same-origin only) ----------
   function pickSource(lang) {
+    // Only an English or x-default alternate can be a "source". Any other language (e.g. the first hreflang listed) is not.
     const here = location.href.split('#')[0];
     const base = (h) => h.split('-')[0];
     const alts = [...document.querySelectorAll('link[rel~="alternate"][hreflang]')]
       .map((l) => ({ h: (l.getAttribute('hreflang') || '').toLowerCase(), href: l.href }))
-      .filter((a) => a.href && a.href.split('#')[0] !== here && (a.h === 'x-default' || base(a.h) !== lang));
-    const order = (a) => (a.h === 'x-default' ? 0 : base(a.h) === 'en' ? 1 : 2);
+      .filter((a) => a.href && a.href.split('#')[0] !== here && (a.h === 'x-default' || base(a.h) === 'en') && base(a.h) !== lang);
+    const order = (a) => (a.h === 'x-default' ? 0 : 1);
     return alts.sort((a, b) => order(a) - order(b))[0] || null;
   }
 
@@ -186,7 +192,7 @@ import { detectBug, formatHints } from './rules.js';
       for (const el of doc.body.querySelectorAll('[placeholder],[alt],[title],[aria-label]')) {
         for (const a of ['placeholder', 'alt', 'title', 'aria-label']) { const t = clean(el.getAttribute(a) || ''); if (t.length >= 2) set.add(t.toLowerCase()); }
       }
-      return { set, long: long.sort((a, b) => b.length - a.length).slice(0, 10), lang: (doc.documentElement.lang || '').toLowerCase().split('-')[0], info: { status: 'used', url: alt.href, lang: alt.h } };
+      return { set, long: long.sort((a, b) => b.length - a.length).slice(0, 10), lang: (doc.documentElement.lang || '').toLowerCase().split('-')[0], info: { status: 'used', url: alt.href, lang: (doc.documentElement.lang || (alt.h === 'x-default' ? '' : alt.h)).toLowerCase() } };
     } catch (e) {
       return { info: { status: 'unavailable', url: alt.href } };
     }
@@ -209,8 +215,9 @@ import { detectBug, formatHints } from './rules.js';
     await classifyTexts(todo.map((it) => it.j));
     for (const it of todo) { // pass 1
       let v = vcache.get(ck(it.j));
-      // Short capitalised phrases are often product/person names: weak evidence isn't enough to flag them.
-      if (it.nameLike && v.v === 'bad' && v.reason !== 'Looks like English text') v = { v: 'unsure' };
+      // Short capitalised phrases are often product/person names: weak evidence isn't enough to flag them
+      // (unless every word is plain interface vocabulary, like "Order History": that is a label, not a name).
+      if (it.nameLike && v.v === 'bad' && !v.label && v.reason !== 'Looks like English text') v = { v: 'unsure' };
       it.base = v;
     }
     // pass 2: fragments we couldn't judge inherit the verdict of the sentence they sit in
@@ -227,7 +234,13 @@ import { detectBug, formatHints } from './rules.js';
     const src = state.sourceInfo.status === 'used' ? state.source : null;
     if (src) {
       for (const it of todo) {
-        if (it.base.v === 'unsure' && !it.nameLike && src.has(nk(it.text)) && (words(it.j) >= 2 || it.j.length >= 8)) {
+        // Identical text proves little on its own for short phrases (French/English share "active", "archive", "message"…):
+        // short ones also need two of the models to read them as another language.
+        const v = it.base.votes, leaning = v ? ['cld3', 'franc', 'tinyld'].filter((k) => v[k] === 'other').length : 0;
+        // (one or two short words never count as backed: models readily "agree" on cognates such as "Archives")
+        const shortStr = words(it.j) <= 2 && (it.j.match(/\p{L}/gu) || []).length < 16;
+        const longEnough = words(it.j) >= 4, backed = leaning >= 2 && it.j.length >= 8 && !shortStr;
+        if (it.base.v === 'unsure' && !it.nameLike && src.has(nk(it.text)) && (longEnough || backed)) {
           it.base = { v: 'bad', detected: state.sourceInfo.lang ? state.sourceInfo.lang.split('-')[0] : undefined, reason: 'Identical to the source-language page', via: 'source' };
         }
       }
@@ -257,18 +270,18 @@ import { detectBug, formatHints } from './rules.js';
     if (styled.has(rootNode)) return;
     const doc = rootNode.nodeType === 9 ? rootNode : rootNode.ownerDocument;
     const s = doc.createElement('style');
-    s.id = STYLE_ID;
+    s.setAttribute('data-tc-style', NS);
     s.textContent = `
-      ::highlight(tc-bad){background-color:rgba(255,214,0,.7);color:#111;text-decoration:underline wavy #d7263d}
-      ::highlight(tc-unsure){background-color:rgba(80,140,255,.28);text-decoration:underline dotted #3b6df0}
-      ::highlight(tc-bug){background-color:rgba(190,60,255,.45);color:#111;text-decoration:underline wavy #7a1fa2}
-      ::highlight(tc-fmt){text-decoration:underline dotted #0f9d8a}
-      ::highlight(tc-focus){background-color:#d7263d;color:#fff}
-      [data-tc-flag="bad"]{outline:2px dashed #d7263d!important;outline-offset:2px!important}
-      [data-tc-flag="unsure"]{outline:2px dotted #3b6df0!important;outline-offset:2px!important}
-      [data-tc-flag="bug"]{outline:2px dashed #7a1fa2!important;outline-offset:2px!important}
-      [data-tc-flag="fmt"]{outline:2px dotted #0f9d8a!important;outline-offset:2px!important}
-      [data-tc-focus]{box-shadow:0 0 0 4px rgba(215,38,61,.5)!important}`;
+      ::highlight(${K.bad}){background-color:rgba(255,214,0,.7);color:#111;text-decoration:underline wavy #d7263d}
+      ::highlight(${K.unsure}){background-color:rgba(80,140,255,.28);text-decoration:underline dotted #3b6df0}
+      ::highlight(${K.bug}){background-color:rgba(190,60,255,.45);color:#111;text-decoration:underline wavy #7a1fa2}
+      ::highlight(${K.fmt}){text-decoration:underline dotted #0f9d8a}
+      ::highlight(${K.focus}){background-color:#d7263d;color:#fff}
+      [data-tc-flag="${NS}:bad"]{outline:2px dashed #d7263d!important;outline-offset:2px!important}
+      [data-tc-flag="${NS}:unsure"]{outline:2px dotted #3b6df0!important;outline-offset:2px!important}
+      [data-tc-flag="${NS}:bug"]{outline:2px dashed #7a1fa2!important;outline-offset:2px!important}
+      [data-tc-flag="${NS}:fmt"]{outline:2px dotted #0f9d8a!important;outline-offset:2px!important}
+      [data-tc-focus="${NS}"]{box-shadow:0 0 0 4px rgba(215,38,61,.5)!important}`;
     (rootNode.nodeType === 9 ? rootNode.head || rootNode.documentElement : rootNode).appendChild(s);
     styled.set(rootNode, s);
   }
@@ -284,16 +297,39 @@ import { detectBug, formatHints } from './rules.js';
   }
 
   function resetMarks() {
-    for (const win of marks.keys()) { try { KEYS.forEach((k) => win.CSS.highlights.delete(k)); } catch (e) { /* frame gone */ } }
+    for (const win of marks.keys()) { try { Object.values(K).forEach((k) => win.CSS.highlights.delete(k)); } catch (e) { /* frame gone */ } }
     marks.clear();
-    for (const root of state ? state.scope.roots : []) root.querySelectorAll?.('[data-tc-flag]').forEach((el) => el.removeAttribute('data-tc-flag'));
+    for (const root of state ? state.scope.roots : []) root.querySelectorAll?.(`[data-tc-flag^="${NS}:"]`).forEach((el) => el.removeAttribute('data-tc-flag'));
+  }
+
+  // Removes whatever an older copy of this script left on the page: its highlights, its style sheet and its outlines. That copy keeps running in
+  // tabs that were not reloaded after the extension was updated, can no longer be reached, and would otherwise leave marks on text that this
+  // check found to be fine. Only names this extension ever used are touched; the page's own highlights are left alone.
+  function purgeForeign() {
+    const docs = new Set([document]), wins = new Set([window]);
+    for (const r of state ? state.scope.roots : []) {
+      const d = r.ownerDocument || r;
+      docs.add(d); if (r.nodeType === 11) docs.add(r);
+      if (d.defaultView) wins.add(d.defaultView);
+    }
+    for (const w of wins) {
+      try { const reg = w.CSS.highlights; for (const k of [...reg.keys()]) if (MARK_KEY.test(k) && !k.startsWith(NS + '-')) reg.delete(k); } catch (e) { /* frame gone */ }
+    }
+    for (const d of docs) {
+      d.querySelectorAll?.('style#tc-style,style[data-tc-style],[data-tc-flag],[data-tc-focus]').forEach((el) => {
+        if (el.localName === 'style') { if (el.getAttribute('data-tc-style') !== NS) el.remove(); return; }
+        if (!(el.getAttribute('data-tc-flag') || '').startsWith(NS + ':')) el.removeAttribute('data-tc-flag');
+        if (el.getAttribute('data-tc-focus') !== NS) el.removeAttribute('data-tc-focus');
+      });
+    }
   }
 
   function render() {
     const p = state.p;
     resetMarks();
+    purgeForeign();
     targets.clear();
-    const stats = { ok: 0, bad: 0, unsure: 0, bug: 0, fmt: 0, okN: 0, badN: 0, unsureN: 0, bugN: 0, fmtN: 0, assumedN: state.assumedN, ignoredN: state.ignoredN };
+    const stats = { ok: 0, bad: 0, unsure: 0, bug: 0, fmt: 0, name: 0, okN: 0, badN: 0, unsureN: 0, bugN: 0, fmtN: 0, nameN: 0, assumedN: state.assumedN, ignoredN: state.ignoredN };
     const issues = [];
     let id = 0;
     const add = (it, verdict, reason, detected) => {
@@ -307,8 +343,8 @@ import { detectBug, formatHints } from './rules.js';
         const m = marksFor(winOf(n));
         if (verdict === 'unsure') { if (p.unsure) m.unsure.add(r); } else m[verdict].add(r);
       } else if (verdict !== 'unsure' || p.unsure) {
-        const cur = n.getAttribute('data-tc-flag');
-        if (!cur || RANK[verdict] > RANK[cur]) n.setAttribute('data-tc-flag', verdict);
+        const cur = (n.getAttribute('data-tc-flag') || '').replace(NS + ':', '');
+        if (!RANK[cur] || RANK[verdict] > RANK[cur]) n.setAttribute('data-tc-flag', NS + ':' + verdict);
       }
       issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: it.v?.votes, confirmed: !!it.v?.confirmed, reason: reason && it.v?.via === 'context' && verdict !== 'fmt' ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length });
     };
@@ -316,15 +352,15 @@ import { detectBug, formatHints } from './rules.js';
       if (!nodeOf(it).isConnected) continue;
       const v = it.v;
       stats[v.v] += it.len; stats[v.v + 'N']++;
-      if (v.v !== 'ok') add(it, v.v, v.reason, v.detected);
+      if (v.v !== 'ok' && v.v !== 'name') add(it, v.v, v.reason, v.detected); // names are counted, never highlighted
       if (p.hints && it.fmt) for (const f of it.fmt) { stats.fmtN++; add(it, 'fmt', f); }
     }
     for (const win of marks.keys()) {
       const m = marks.get(win), reg = win.CSS.highlights;
-      if (m.bad.size) reg.set('tc-bad', m.bad);
-      if (m.unsure.size) reg.set('tc-unsure', m.unsure);
-      if (m.bug.size) reg.set('tc-bug', m.bug);
-      if (m.fmt.size) reg.set('tc-fmt', m.fmt);
+      if (m.bad.size) reg.set(K.bad, m.bad);
+      if (m.unsure.size) reg.set(K.unsure, m.unsure);
+      if (m.bug.size) reg.set(K.bug, m.bug);
+      if (m.fmt.size) reg.set(K.fmt, m.fmt);
     }
     const order = { bug: 0, bad: 1, unsure: 2, fmt: 3 };
     issues.sort((a, b) => order[a.verdict] - order[b.verdict] || b.len - a.len);
@@ -347,6 +383,7 @@ import { detectBug, formatHints } from './rules.js';
     clearTimeout(timer); dirty.clear();
     observers.forEach((o) => o.disconnect()); observers = []; observed = new WeakSet();
     resetMarks();
+    purgeForeign();
     for (const s of styled.values()) s.remove();
     styled.clear(); targets.clear();
     state = null; last = null;
@@ -365,10 +402,10 @@ import { detectBug, formatHints } from './rules.js';
       const h = new win.Highlight(r);
       h.priority = 10;
       ensureStyle(n.getRootNode());
-      win.CSS.highlights.set('tc-focus', h);
-      setTimeout(() => win.CSS.highlights.delete('tc-focus'), 2200);
+      win.CSS.highlights.set(K.focus, h);
+      setTimeout(() => win.CSS.highlights.delete(K.focus), 2200);
     } else if (el) {
-      el.setAttribute('data-tc-focus', '');
+      el.setAttribute('data-tc-focus', NS);
       setTimeout(() => el.removeAttribute('data-tc-focus'), 2200);
     }
     return true;
@@ -408,7 +445,7 @@ import { detectBug, formatHints } from './rules.js';
       for (const r of records) {
         if (r.type === 'characterData') { const e = r.target.parentElement || r.target.parentNode?.host; if (e) dirty.add(e); }
         else {
-          for (const n of r.addedNodes) { if (n.nodeType === 1 && n.id !== STYLE_ID) dirty.add(n); else if (n.nodeType === 3) dirty.add(r.target); }
+          for (const n of r.addedNodes) { if (n.nodeType === 1 && !n.hasAttribute('data-tc-style')) dirty.add(n); else if (n.nodeType === 3) dirty.add(r.target); }
           if (r.removedNodes.length) dirty.add(null); // forces a re-render so highlights on removed text disappear
         }
       }

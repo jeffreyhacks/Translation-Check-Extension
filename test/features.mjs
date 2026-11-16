@@ -2,6 +2,7 @@ import { loadNew, sleep, page } from './harness.mjs';
 let pass = 0, fail = 0;
 const t = (name, cond, extra = '') => { if (cond) pass++; else fail++; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : '  ' + extra}`); };
 const scan = (h, o = {}) => h.call({ type: 'scan', lang: 'es', attrs: true, unsure: true, mode: 'balanced', source: false, live: false, ...o });
+const hasMark = (w, kind) => [...w.CSS.highlights._m.keys()].some((k) => new RegExp(`^tc-[a-z0-9]{6}-${kind}$`).test(k)); // this copy's own marks
 const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que necesitas para tu hogar y tu familia.</p><p>Envío gratis en todos los pedidos superiores a cincuenta euros.</p>`;
 
 // 1. Broken text -------------------------------------------------------------
@@ -13,7 +14,7 @@ const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que nece
   t('bug: domain name not flagged', !r.issues.some((i) => i.text === 'docs.example.com'));
   t('bug: broken strings excluded from score', r.score === 100, 'score ' + r.score);
   t('bug: badge counts broken text', h.bgCalls.badges.at(-1) === 5, JSON.stringify(h.bgCalls.badges));
-  t('bug: highlight registered', h.w.CSS.highlights._m.has('tc-bug'));
+  t('bug: highlight registered', hasMark(h.w, 'bug'));
   const off = await scan(h, { bugs: false });
   t('bug: can be switched off', !off.issues.some((i) => i.verdict === 'bug'));
 }
@@ -24,21 +25,21 @@ const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que nece
   sr.innerHTML = `<p>Our best sellers are shipping this week with free delivery.</p><button>Add to cart</button><p>Todos los derechos reservados por la empresa.</p>`;
   const r = await scan(h);
   t('shadow DOM: English text inside shadow root flagged', r.issues.filter((i) => i.verdict === 'bad').length === 2, JSON.stringify(r.issues.map((i) => i.text)));
-  t('shadow DOM: style injected into shadow root', !!sr.querySelector('#tc-style'));
+  t('shadow DOM: style injected into shadow root', !!sr.querySelector('style[data-tc-style]'));
   await h.call({ type: 'clear' });
-  t('shadow DOM: clear removes injected style', !sr.querySelector('#tc-style'));
+  t('shadow DOM: clear removes injected style', !sr.querySelector('style[data-tc-style]'));
 }
 // 3. Same-origin iframe ----------------------------------------------------------
 {
   const h = loadNew(page(SP + `<iframe id="f"></iframe>`, 'es'));
   const f = h.w.document.getElementById('f'), fw = f.contentWindow;
   fw.Element.prototype.checkVisibility = () => true;
-  fw.CSS = { highlights: { _m: new Map(), set(k, v) { this._m.set(k, v); }, delete(k) { this._m.delete(k); } } };
+  fw.CSS = { highlights: { _m: new Map(), set(k, v) { this._m.set(k, v); }, delete(k) { this._m.delete(k); }, keys() { return this._m.keys(); } } };
   fw.Highlight = class { constructor(...r) { this.s = new Set(r); } add(r) { this.s.add(r); } get size() { return this.s.size; } };
   f.contentDocument.body.innerHTML = `<p>Free shipping on all orders over fifty dollars today.</p><p>Gracias por su compra en nuestra tienda.</p>`;
   const r = await scan(h);
   t('iframe: English text in same-origin frame flagged', r.issues.some((i) => i.verdict === 'bad' && /Free shipping/.test(i.text)), JSON.stringify(r.issues.map((i) => i.text)));
-  t('iframe: highlight registered in the frame\'s own window', fw.CSS.highlights._m.has('tc-bad'));
+  t('iframe: highlight registered in the frame\'s own window', hasMark(fw, 'bad'));
 }
 // 4. Live updates ----------------------------------------------------------------
 {
@@ -140,6 +141,32 @@ const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que nece
   const wrongT = await scan(loadNew(page(DE, 'de')), { lang: 'en' });
   t('German page, target English: flagged as German (banner case)', wrongT.stats.badN >= 6 && wrongT.issues.filter((i) => i.verdict === 'bad').every((i) => i.detected === 'de'), JSON.stringify(wrongT.issues.map((i) => i.detected)));
 }
+// 10c. False-positive regressions: cognates, short words, misleading labels, source comparison ----------------
+{
+  const FRP = `<h2>Gestion des projets</h2><p>Ici vous pouvez gérer vos projets, inviter des membres et consulter les statistiques de votre équipe.</p>
+    <div><button>Active</button><button>Archive</button><button>Contact actif</button><button>Statut</button><button>Mobile</button><button>Export</button><button>Account</button></div>
+    <ul><li>Projet Alpha <span>Active</span></li><li>Projet Beta <span>Archive</span></li></ul>`;
+  const alt = '<link rel="alternate" hreflang="tr" href="https://www.acmecloud.io/tr/"><link rel="alternate" hreflang="de" href="https://www.acmecloud.io/de/"><link rel="alternate" hreflang="en" href="https://www.acmecloud.io/en/">';
+  const SHELL = '<html lang="en"><body><button>Active</button><button>Archive</button><button>Export</button><button>Messages</button><p>Manage your projects here.</p></body></html>';
+  const fm = { 'https://www.acmecloud.io/en/': SHELL, 'https://www.acmecloud.io/tr/': SHELL, 'https://www.acmecloud.io/de/': SHELL };
+  for (const mode of ['balanced', 'strict']) {
+    const r = await scan(loadNew(page(FRP, 'fr', alt), { fetchMap: fm }), { lang: 'fr', mode, source: true });
+    t(`false positives (${mode}): French cognates (Active, Archive, Contact actif, Statut, Mobile, Export, Account) are never "untranslated"`, r.stats.badN === 0, JSON.stringify(r.issues.filter((i) => i.verdict === 'bad').map((i) => [i.text, i.detected])));
+  }
+  const DE = `<p>Ändert Menüs, Schaltflächen und den Text auf dem Bildschirm. Ändert nicht die Sprache der <b>Antworten</b>.</p><p>Verwalten Sie Ihre Projekte und laden Sie Mitglieder ein, um gemeinsam zu arbeiten.</p><button>Aktiv</button><button>Archiv</button>`;
+  const hreflangTr = '<link rel="alternate" hreflang="tr" href="https://www.acmecloud.io/tr/"><link rel="alternate" hreflang="fr" href="https://www.acmecloud.io/fr/">';
+  const asTarget = await scan(loadNew(page(DE, 'de', hreflangTr), { fetchMap: fm }), { lang: 'de', source: true });
+  t('false positives: a German page checked as German has no warnings even with Turkish/French alternates listed', asTarget.stats.badN === 0, JSON.stringify(asTarget.issues));
+  t('source comparison never uses a non-English alternate (hreflang "tr" first) as the source', asTarget.source.status === 'none', JSON.stringify(asTarget.source));
+  const wrong = await scan(loadNew(page(DE, 'de', hreflangTr), { fetchMap: fm }), { lang: 'fr' });
+  const labels = wrong.issues.filter((i) => i.verdict === 'bad').map((i) => i.detected);
+  t('labels: German text on a French target is labelled German — never Turkish', labels.length >= 1 && labels.every((l) => l === 'de'), JSON.stringify(labels));
+  const cog = loadNew(page(`<p>Bienvenue dans notre boutique en ligne, vous y trouverez tout pour la maison et la famille.</p><button>Messages</button><button>Standard</button><button>Document</button>`, 'fr', alt), { fetchMap: fm });
+  const rc = await scan(cog, { lang: 'fr', mode: 'strict', source: true });
+  t('source comparison: short words identical in both languages (Messages, Standard, Document) are not "untranslated"', rc.stats.badN === 0, JSON.stringify(rc.issues.filter((i) => i.verdict === 'bad')));
+  const real = await scan(loadNew(page(`<p>Bienvenue dans notre boutique en ligne, vous y trouverez tout pour la maison et la famille.</p><button>Save changes</button><p>Welcome back to your dashboard, here is everything new.</p>`, 'fr', alt), { fetchMap: fm }), { lang: 'fr', source: true });
+  t('recall kept: real English ("Save changes", a sentence) is still flagged on that French page', real.issues.filter((i) => i.verdict === 'bad').length >= 2, JSON.stringify(real.issues.map((i) => [i.verdict, i.text])));
+}
 // 11. Big page stays quick ---------------------------------------------------------
 {
   const body = Array.from({ length: 4000 }, (_, i) => `<p>${i % 4 === 0 ? 'Our best sellers number ' + i + ' are shipping this week with free delivery' : 'Envío gratis en todos los pedidos superiores a cincuenta euros número ' + i}</p>`).join('');
@@ -147,5 +174,46 @@ const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que nece
   const t0 = Date.now(); const r = await scan(h); const ms = Date.now() - t0;
   t(`big page: 4000 paragraphs checked in ${ms} ms`, !r.error && r.stats.badN >= 900 && ms < 15000, `badN=${r.stats?.badN} ms=${ms}`);
 }
+// 10d. Marks left behind by an older copy of the extension (still running in a tab that was not reloaded after an update) ----------------
+{
+  const plant = (h) => { // what versions up to 2.1.2 put on a page, planted from outside this script
+    const d = h.w.document, hl = h.w.CSS.highlights, p = d.querySelector('p');
+    const st = d.createElement('style'); st.id = 'tc-style'; st.textContent = '::highlight(tc-bad){background:yellow}'; d.head.append(st);
+    const r = d.createRange(); r.selectNodeContents(p);
+    hl.set('tc-bad', new h.w.Highlight(r)); hl.set('tc-unsure', new h.w.Highlight(r)); hl.set('search-hit', new h.w.Highlight(r)); // the last one is the page's own
+    p.setAttribute('data-tc-flag', 'bad'); d.querySelector('h1').setAttribute('data-tc-focus', '');
+  };
+  const left = (h) => ({ keys: [...h.w.CSS.highlights._m.keys()].filter((k) => /^tc-/.test(k)), style: h.w.document.querySelectorAll('style#tc-style').length, flag: h.w.document.querySelectorAll('[data-tc-flag="bad"]').length, focus: h.w.document.querySelectorAll('[data-tc-focus=""]').length });
+  const html = page(`<h1>Bienvenidos a la tienda</h1>` + SP, 'es');
+  {
+    const h = loadNew(html); plant(h);
+    const r = await scan(h, { live: true });
+    const l = left(h);
+    t('stale marks: a clean page is reported 100% yet the old highlights are removed', r.score === 100 && !l.keys.length && !l.style && !l.flag && !l.focus, JSON.stringify({ score: r.score, ...l }));
+    t('stale marks: the page\'s own highlights are left alone', h.w.CSS.highlights._m.has('search-hit'));
+    plant(h); h.w.document.body.insertAdjacentHTML('beforeend', '<p>Gracias por su visita a nuestra tienda.</p>'); await sleep(1600); // the old script re-asserting its marks when the page changes
+    const l2 = left(h);
+    t('stale marks: removed again on the next live refresh', !l2.keys.length && !l2.style && !l2.flag, JSON.stringify(l2));
+  }
+  {
+    const h = loadNew(html); plant(h);
+    await scan(h); plant(h); await h.call({ type: 'clear' });
+    const l = left(h);
+    t('stale marks: Clear removes them too', !l.keys.length && !l.style && !l.flag && !l.focus, JSON.stringify(l));
+  }
+  {
+    const h = loadNew(html); // a previous copy of THIS version: random private names
+    const d = h.w.document, old = d.createElement('style'); old.setAttribute('data-tc-style', 'a1b2c3'); d.head.append(old);
+    const r = d.createRange(); r.selectNodeContents(d.querySelector('p')); h.w.CSS.highlights.set('tc-a1b2c3-bad', new h.w.Highlight(r)); d.querySelector('h1').setAttribute('data-tc-flag', 'a1b2c3:bad');
+    d.body.insertAdjacentHTML('beforeend', '<p>Our new model is shipping this week with free delivery for everyone.</p>');
+    const res = await scan(h);
+    const keys = [...h.w.CSS.highlights._m.keys()];
+    t('stale marks: an earlier copy of this version is removed while the current marks stay', res.issues.some((i) => i.verdict === 'bad') && hasMark(h.w, 'bad') && !keys.includes('tc-a1b2c3-bad')
+      && d.querySelectorAll('style[data-tc-style]').length === 1 && !d.querySelector('[data-tc-flag="a1b2c3:bad"]'), JSON.stringify(keys));
+    const own = d.querySelector('style[data-tc-style]').getAttribute('data-tc-style');
+    t('stale marks: this check\'s highlights are styled by its own style sheet', keys.some((k) => k.startsWith(own + '-bad')), own + ' ' + JSON.stringify(keys));
+  }
+}
+
 console.log(`\nfeatures: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
