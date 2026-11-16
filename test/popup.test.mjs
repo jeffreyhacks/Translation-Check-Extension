@@ -7,7 +7,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RESULT = {
   lang: 'es', requested: 'auto', mode: 'balanced', host: 'shop.example.com', pageLang: 'es', score: 67, live: true,
   source: { status: 'used', lang: 'en' }, models: { cld3: 'wasm', franc: 'ready' },
-  stats: { ok: 200, bad: 100, unsure: 10, bug: 20, fmt: 0, okN: 20, badN: 2, unsureN: 1, bugN: 1, fmtN: 0, assumedN: 3, ignoredN: 4 },
+  stats: { ok: 200, bad: 100, unsure: 10, bug: 20, fmt: 0, name: 40, okN: 20, badN: 2, unsureN: 1, bugN: 1, fmtN: 0, nameN: 5, assumedN: 3, ignoredN: 4 },
   issues: [
     { id: 1, verdict: 'bug', kind: 'text', text: 'checkout.button.save', reason: 'Looks like a translation key', len: 20 },
     { id: 2, verdict: 'bad', kind: 'text', text: 'Add to cart', detected: 'en', reason: 'Looks like English text', len: 11, votes: { tinyld: 'other', cld3: 'other', franc: 'abstain' }, confirmed: true },
@@ -20,10 +20,11 @@ const PDF_RESULT = { kind: 'pdf', lang: 'de', requested: 'auto', mode: 'balanced
   issues: [{ id: 1, verdict: 'bad', kind: 'pdf', page: 3, pages: [3, 4, 7], text: 'Please read it carefully before you start.', detected: 'en', reason: 'Detected as another language', len: 40, votes: { tinyld: 'other', cld3: 'other', franc: 'other' }, confirmed: true }] };
 PDF_RESULT.allIssues = PDF_RESULT.issues;
 
-async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x') {
+async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', o = {}) {
   const dom = new JSDOM(fs.readFileSync(file, 'utf8'), { runScripts: 'outside-only', pretendToBeVisual: true, url: 'chrome-extension://abc/' + file });
   const w = dom.window;
-  const store = {}, sent = [], reg = [], downloads = [], updates = [], clip = [], perms = [], runtimeSent = [];
+  const store = { ...(o.store || {}) }, sent = [], reg = [], downloads = [], updates = [], clip = [], perms = [], removed = [], runtimeSent = [];
+  let permAnswer = true, contains = o.contains !== false;
   let msgL, fetchOk = true;
   w.chrome = {
     i18n: { getUILanguage: () => 'en-US' },
@@ -32,7 +33,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x') 
       sendMessage: async (id, m) => { sent.push(m); return m.type === 'scan' ? RESULT : m.type === 'status' ? { result: null } : m.type === 'export' ? { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: RESULT.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) } : { ok: true }; },
       onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
     scripting: { executeScript: async () => {}, registerContentScripts: async (a) => reg.push(...a), unregisterContentScripts: async () => {} },
-    permissions: { request: async (o) => { perms.push(o); return true; }, remove: async () => true },
+    permissions: { request: (q) => { perms.push(q); return o.hold ? new Promise(() => {}) : Promise.resolve(permAnswer); }, remove: async (q) => { removed.push(q); return true; }, contains: async () => contains },
     runtime: { onMessage: { addListener: (f) => (msgL = f) }, getURL: (p) => 'chrome-extension://abc/' + p, sendMessage: async (m) => { runtimeSent.push(m); return {}; } },
     sidePanel: { open: async () => {} },
   };
@@ -50,7 +51,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x') 
   w.fetch = async () => (fetchOk ? { ok: true, arrayBuffer: async () => new Uint8Array([37, 80, 68, 70]).buffer } : { ok: false, status: 403 });
   w.eval(fs.readFileSync('popup.js', 'utf8'));
   await sleep(50);
-  return { w, d: w.document, store, sent, reg, downloads, updates, clip, perms, pdfCalls, runtimeSent, failFetch: () => (fetchOk = false), msg: (m, s) => msgL(m, s), $: (s) => w.document.querySelector(s) };
+  return { w, d: w.document, store, sent, reg, downloads, updates, clip, perms, removed, pdfCalls, runtimeSent, denyPerms: () => (permAnswer = false), failFetch: () => (fetchOk = false), msg: (m, s) => msgL(m, s), $: (s) => w.document.querySelector(s) };
 }
 const readBlob = (w, blob, as = 'text') => new Promise((res) => { const r = new w.FileReader(); r.onload = () => res(r.result); if (as === 'text') r.readAsText(blob); else r.readAsArrayBuffer(blob); });
 const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.textContent).join(' | ');
@@ -60,9 +61,10 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('popup: language picker populated, defaulting to the page\'s own language', p.$('#lang').options.length >= 40 && p.$('#lang').value === 'auto' && p.$('#lang').options[0].value === 'auto');
   const label = (c) => [...p.$('#lang').options].find((o) => o.value === c)?.textContent;
   t('popup: English name comes first ("German (Deutsch)")', label('de') === 'German (Deutsch)' && label('es') === 'Spanish (español)' && label('ja').startsWith('Japanese ('), `${label('de')} | ${label('es')}`);
-  t('popup: minimal by default — settings drawer is collapsed', p.$('#settings').hidden && p.$('#result').hidden);
+  t('popup: settings drawer is collapsed by default, language field is labelled', p.$('#settings').hidden && p.$('#result').hidden && /Page should be in/.test(p.$('.cap').textContent) && p.$('h1').textContent === 'Translation Check');
   p.$('#settingsBtn').click();
   t('popup: gear opens the settings drawer', !p.$('#settings').hidden && p.$('#settingsBtn').getAttribute('aria-expanded') === 'true');
+  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 4 && p.d.querySelectorAll('#settings .opt .d').length === 9 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
   t('popup: drawer has strictness segments and the new model switches', p.d.querySelectorAll('input[name=mode]').length === 3 && p.$('#verify').checked && !p.$('#confirmed').checked);
   t('popup: side-panel button shown in popup', p.$('#openPanel').hidden === false);
   t('popup: button says "Check page" on web pages', p.$('#scanLabel').textContent === 'Check page');
@@ -72,8 +74,10 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('popup: scan sends every option incl. model verification', scanMsg && scanMsg.lang === 'auto' && scanMsg.live === true && scanMsg.source === true && scanMsg.hints === false && scanMsg.related === true && scanMsg.verify === true && scanMsg.confirmedOnly === false && scanMsg.mode === 'balanced', JSON.stringify(scanMsg));
   t('popup: stats and tab counts', p.$('#nBad').textContent === '2' && p.$('#tabBad .n').textContent === '2' && p.$('#tabUnsure .n').textContent === '1' && !p.$('#tabBug').hidden && p.$('#tabFmt').hidden);
   const ct = chipsText(p);
-  t('popup: info is shown as compact chips, not sentences', /es/.test(ct) && /3 models/.test(ct) && /live/.test(ct) && /en/.test(ct) && /4/.test(ct) && /3 assumed/.test(ct), ct);
+  t('popup: info is shown as short labelled chips', /Spanish/.test(ct) && /3 models/.test(ct) && /Live/.test(ct) && /Source: English/.test(ct) && /4 skipped/.test(ct) && /3 assumed/.test(ct), ct);
+  t('popup: names are a chip of their own, with an explanation, not part of the unclear count', /5 names/.test(ct) && /same in every language/.test(p.d.querySelector('#chips').innerHTML) && p.$('#tabUnsure .n').textContent === '1', ct);
   t('popup: page text is shown as text, never as HTML', !p.$('#list img') && /<img src=x/.test(p.$('#list').textContent));
+  t('popup: each row shows why it was flagged and how many models agree', /Looks like English text/.test(p.$('#list').textContent) && /2\/3/.test(p.$('#list').textContent) && /1\/3/.test(p.$('#list').textContent));
   t('popup: model agreement dots (red = other language) with tooltip', p.d.querySelectorAll('#list .pips').length === 2 && p.d.querySelector('#list .pips .pip.other') && /CLD3: other/.test(p.d.querySelector('#list .pips').title));
   t('popup: confirmed warnings get a check mark, unconfirmed do not', p.d.querySelectorAll('#list .pips.confirmed').length === 1 && p.d.querySelectorAll('#list .pips .check').length === 1);
   p.$('#next').click(); await sleep(10);
@@ -100,9 +104,11 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   const html = await readBlob(p.w, p.downloads.find((d) => d instanceof p.w.Blob));
   t('popup: HTML report escapes page text', !/<img src=x/.test(html) && /&lt;img src=x/.test(html));
   p.$('#auto').click(); await sleep(50);
-  t('popup: auto-check registers the content script for this site only', p.reg.length === 1 && p.reg[0].matches[0] === '*://shop.example.com/*' && p.store.autoSites.includes('shop.example.com'));
+  t('popup: auto-check asks for this site only, with an origin the manifest lists as optional (https://host/*, never "*://")', p.perms.length === 1 && p.perms[0].origins.length === 1 && p.perms[0].origins[0] === 'https://shop.example.com/*' && p.store.autoSites.includes('shop.example.com'), JSON.stringify(p.perms));
+  t('popup: auto-check asks the background worker to finish the setup (the popup itself does not register scripts)', p.runtimeSent.some((m) => m.type === 'tc-sync-auto') && p.reg.length === 0);
+  t('popup: no error is shown after turning auto-check on', !/Could not/.test(p.$('#status').textContent), p.$('#status').textContent);
   p.$('#auto').click(); await sleep(50);
-  t('popup: auto-check can be switched off', !p.store.autoSites.includes('shop.example.com'));
+  t('popup: auto-check can be switched off, and the permission is given back', !p.store.autoSites.includes('shop.example.com') && p.removed.some((r) => r.origins[0] === 'https://shop.example.com/*'), JSON.stringify(p.removed));
   p.msg({ type: 'tc-result', result: { ...RESULT, score: 50 } }, { tab: { id: 5 } });
   t('popup: live update from the page refreshes the view', p.$('#score').textContent === '50%');
   p.msg({ type: 'tc-result', result: { ...RESULT, score: 10 } }, { tab: { id: 99 } });
@@ -113,13 +119,39 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('popup: short banner appears when the target is probably wrong', !p.$('#mismatch').hidden && /Mostly German/.test(p.$('#mismatchText').textContent) && /page’s own language/.test(p.$('#mismatchText').textContent), p.$('#mismatchText').textContent);
   t('popup: banner offers one-click fix', p.$('#mismatchFix').textContent === 'Check for German');
   p.$('#mismatchFix').click(); await sleep(60);
-  t('popup: fix switches the target and re-checks', p.$('#lang').value === 'de' && p.sent.filter((m) => m.type === 'scan').pop().lang === 'de' && p.store.opts.lang === 'de');
+  t('popup: fix switches the target and re-checks', p.$('#lang').value === 'de' && p.$('#langInput').value === 'German (Deutsch)' && p.sent.filter((m) => m.type === 'scan').pop().lang === 'de' && p.store.opts.lang === 'de');
   p.$('#clear').click(); await sleep(30);
   t('popup: clear hides results', p.$('#result').hidden);
   p.$('#confirmed').checked = true; p.$('#confirmed').dispatchEvent(new p.w.Event('change')); p.$('#hints').checked = true; p.$('#hints').dispatchEvent(new p.w.Event('change')); await sleep(20);
   t('popup: options are remembered', p.store.opts.hints === true && p.store.opts.confirmedOnly === true && p.store.opts.verify === true);
   const strict = p.d.querySelector('input[name=mode][value=strict]'); strict.checked = true; strict.dispatchEvent(new p.w.Event('change')); await sleep(10);
   t('popup: strictness segment is saved', p.store.opts.mode === 'strict');
+}
+// ---- auto-check: Chrome's permission prompt can close the popup; denial; shown state ----
+{
+  const p = await boot('popup.html', 'https://shop.example.com/x', { hold: true });
+  p.$('#auto').click(); await sleep(40);
+  t('auto-check: the choice is saved before the permission prompt, so it survives the popup closing', p.store.autoSites.includes('shop.example.com'), JSON.stringify(p.store));
+  const d = await boot('popup.html', 'https://shop.example.com/x');
+  d.denyPerms(); d.$('#auto').click(); await sleep(60);
+  t('auto-check: if the permission is refused the switch goes back off and nothing is kept', d.$('#auto').checked === false && !(d.store.autoSites || []).includes('shop.example.com'), JSON.stringify(d.store));
+  const o = await boot('popup.html', 'https://shop.example.com/x', { store: { autoSites: ['shop.example.com'] } });
+  t('auto-check: shows on when the site is saved and permitted', o.$('#auto').checked === true);
+  const n = await boot('popup.html', 'https://shop.example.com/x', { store: { autoSites: ['shop.example.com'] }, contains: false });
+  t('auto-check: shows off when the permission was taken away in Chrome', n.$('#auto').checked === false);
+  const h = await boot('popup.html', 'http://intranet.local:8080/x'); h.$('#auto').click(); await sleep(50);
+  t('auto-check: http sites ask for the http origin', h.perms[0] && h.perms[0].origins[0] === 'http://intranet.local/*', JSON.stringify(h.perms));
+}
+// ---- Ignore keeps you on the tab you were working in ----
+{
+  const p = await boot(); p.$('#scan').click(); await sleep(50);
+  p.$('#tabUnsure').click();
+  t('ignore: the Unclear tab lists its text with an Ignore button', /Lorem ipsum/.test(p.$('#list').textContent) && !!p.$('#list .ignore-btn'));
+  p.$('#list .ignore-btn').click(); await sleep(90);
+  t('ignore: after Ignore on the Unclear tab you stay on the Unclear tab', p.$('#tabUnsure').getAttribute('aria-selected') === 'true' && p.$('#tabBad').getAttribute('aria-selected') === 'false', p.$('#tabUnsure').getAttribute('aria-selected'));
+  t('ignore: the re-check ran with the new ignore list', p.sent.filter((m) => m.type === 'scan').pop().ignore.includes('Lorem ipsum'));
+  p.$('#scan').click(); await sleep(60);
+  t('ignore: a fresh "Check page" still starts on Untranslated', p.$('#tabBad').getAttribute('aria-selected') === 'true');
 }
 // ---- PDF in the browser's viewer ----
 {
@@ -145,6 +177,37 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   const f = await boot('popup.html', 'file:///C:/docs/local.pdf');
   f.failFetch(); f.$('#scan').click(); await sleep(80);
   t('pdf popup: local files explain the file-access switch', /Allow access to file URLs/.test(f.$('#status').textContent), f.$('#status').textContent);
+}
+// ---- searchable language picker ----
+{
+  const p = await boot();
+  const input = p.$('#langInput'), list = p.$('#langList'), W = p.w;
+  const type = (q) => { input.value = q; input.dispatchEvent(new W.Event('input', { bubbles: true })); };
+  const key = (k) => input.dispatchEvent(new W.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+  const opts = () => [...p.d.querySelectorAll('#langList li[data-value]')].map((l) => l.textContent);
+  t('picker: shows the current choice and starts closed', input.value === 'Page’s own language' && list.hidden && input.getAttribute('aria-expanded') === 'false');
+  input.dispatchEvent(new W.Event('focus'));
+  t('picker: focusing opens the full list with the current one marked', !list.hidden && opts().length === p.$('#lang').options.length && p.$('#langList li[aria-selected=true]').textContent === 'Page’s own language' && p.d.body.classList.contains('picking'));
+  t('picker: exposed to screen readers (combobox/listbox/option)', input.getAttribute('role') === 'combobox' && list.getAttribute('role') === 'listbox' && p.d.querySelector('#langList li').getAttribute('role') === 'option');
+  type('deu'); t('picker: native name ("deu" → German)', opts()[0] === 'German (Deutsch)', JSON.stringify(opts()));
+  type('ger'); t('picker: English name ("ger" → German first)', opts()[0] === 'German (Deutsch)', JSON.stringify(opts()));
+  type('espanol'); t('picker: accent-insensitive ("espanol" → Spanish)', opts()[0] === 'Spanish (español)', JSON.stringify(opts()));
+  type('中'); t('picker: native scripts ("中" → Chinese)', opts()[0] === 'Chinese (中文)', JSON.stringify(opts()));
+  type('pt'); t('picker: language code ("pt" → Portuguese)', opts().includes('Portuguese (português)'));
+  type('own'); t('picker: "own" finds the page-language option', opts()[0] === 'Page’s own language');
+  type('zzzz'); key('Enter');
+  t('picker: no match shows a message and Enter does nothing', /No matching language/.test(list.textContent) && p.$('#lang').value === 'auto');
+  type('ja'); key('Enter'); await sleep(20);
+  t('picker: Enter chooses best match, closes and saves', p.$('#lang').value === 'ja' && list.hidden && /Japanese/.test(input.value) && p.store.opts.lang === 'ja', input.value);
+  input.dispatchEvent(new W.Event('focus')); type('ita'); key('Escape');
+  t('picker: Escape closes and restores the previous choice', list.hidden && /Japanese/.test(input.value) && p.$('#lang').value === 'ja', input.value);
+  input.dispatchEvent(new W.Event('focus')); type('xx'); input.dispatchEvent(new W.Event('blur'));
+  t('picker: clicking away discards a half-typed search', list.hidden && input.value !== 'xx', input.value);
+  input.dispatchEvent(new W.Event('focus'));
+  [...p.d.querySelectorAll('#langList li[data-value]')].find((l) => l.dataset.value === 'it').dispatchEvent(new W.MouseEvent('mousedown', { bubbles: true, cancelable: true })); await sleep(20);
+  t('picker: clicking an option chooses it', p.$('#lang').value === 'it' && input.value === 'Italian (italiano)' && p.store.opts.lang === 'it', input.value);
+  p.$('#scan').click(); await sleep(60);
+  t('picker: the chosen language is what gets checked', p.sent.filter((m) => m.type === 'scan').pop().lang === 'it');
 }
 {
   const p = await boot('panel.html');
