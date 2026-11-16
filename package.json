@@ -1,0 +1,21 @@
+{
+  "name": "translation-check",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "pretest": "npm run build",
+    "test": "node test/engine.test.mjs && node test/mask.test.mjs && node test/rules.test.mjs && node test/german.test.mjs && node test/verify.test.mjs && node test/pdf.test.mjs && node test/features.mjs && node test/popup.test.mjs"
+  },
+  "dependencies": {
+    "cld3-asm": "^4.0.0",
+    "franc-min": "^6.2.0",
+    "pdfjs-dist": "^3.11.174",
+    "tinyld": "^1.3.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0"
+  }
+}

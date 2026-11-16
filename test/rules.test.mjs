@@ -1,0 +1,14 @@
+import { detectBug, formatHints } from '../src/rules.js';
+let ok = 0, n = 0; const t = (name, got, exp) => { n++; const pass = exp ? !!got : !got; if (pass) ok++; else console.log('FAIL', name, '->', got); };
+for (const s of ['checkout.button.save','common:buttons.save','ERR_NOT_FOUND','button_save_label','Hello {{name}}','Hola ${user}','{0} items','%s artículos','%1$s of %2$s','__MSG_title__','[object Object]','undefined','Welcome undefined','NaN items','translation missing: es.home.title','null','%(count)s files']) t('bug '+s, detectBug(s), true);
+for (const s of ['www.google.com','docs.example.com','hello world','Guardar cambios','100% seguro','50% off','v2.1.0','e.g.','Node.js','user_name','a.b.c','Contacto','The null hypothesis','COVID_19 data','Total: 45%']) t('clean '+s, detectBug(s), false);
+t('hint 1,234,567 de', formatHints('Gesamt: 1,234,567 Nutzer','de').length, true);
+t('hint 1,234.56 es', formatHints('Total 1,234.56','es').length, true);
+t('no hint 1,234,567 en', formatHints('Total 1,234,567','en').length, false);
+t('hint €49.99 fr', formatHints('Prix €49.99','fr').length, true);
+t('no hint 49,99 € fr', formatHints('Prix 49,99 €','fr').length, false);
+t('hint $5,99 en', formatHints('Only $5,99','en').length, true);
+t('hint date / on de', formatHints('Datum 25/11/2026','de').length, true);
+t('no hint date . on de', formatHints('Datum 25.11.2026','de').length, false);
+t('no hint ISO date', formatHints('2026-11-25','de').length, false);
+console.log(`rules: ${ok}/${n}`);
