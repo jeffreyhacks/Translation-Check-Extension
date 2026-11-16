@@ -5,7 +5,7 @@ import { webcrypto } from 'crypto';
 
 
 /** Run background.js the way Chrome does: a service-worker-like global (no process/require/window). */
-function runWorker(chromeStub) {
+export function runWorker(chromeStub) {
   function WorkerGlobalScope() {}
   Object.defineProperty(WorkerGlobalScope, Symbol.hasInstance, { value: () => true });
   const sandbox = { chrome: chromeStub, crypto: webcrypto, console, setTimeout, clearTimeout, fetch, TextDecoder, TextEncoder, atob, btoa, URL, performance, WebAssembly,
@@ -18,7 +18,7 @@ function runWorker(chromeStub) {
 function stubHighlight(w) {
   w.Element.prototype.checkVisibility = () => true;
   w.Element.prototype.scrollIntoView = function () {};
-  w.CSS = { highlights: { _m: new Map(), set(k, v) { this._m.set(k, v); }, delete(k) { this._m.delete(k); } } };
+  w.CSS = { highlights: { _m: new Map(), set(k, v) { this._m.set(k, v); }, delete(k) { this._m.delete(k); }, keys() { return this._m.keys(); } } };
   w.Highlight = class { constructor(...r) { this.s = new Set(r); this.priority = 0; } add(r) { this.s.add(r); } get size() { return this.s.size; } };
 }
 

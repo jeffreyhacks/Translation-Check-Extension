@@ -1,14 +1,40 @@
-# Translation Check 2.0.1
+# Translation Check 2.1.5
 
 Checks whether a web page **or a PDF open in the browser** is fully in the language you pick, and highlights what isn't.
 Load this folder in `chrome://extensions` (Developer mode → Load unpacked). Needs Chrome 114+.
 
 ## How a warning is decided
 1. **tinyld** + rules (numbers, durations, versions, model names, brands and URLs are ignored first) propose a verdict.
-2. **CLD3** (Google's detector, WebAssembly) and **franc** vote independently. Two models that read the text as the target language
-   withdraw the warning; two that agree on another language can raise one. Each warning shows three dots (one per model) and a ✓ when 2+ agree.
+2. **CLD3** (Google's detector, WebAssembly) and **franc** vote independently. A model only abstains when it truly has no guess: a correct
+   but unconfident guess still counts. **When two models agree, that decides:** two that read the text as the target language withdraw the
+   warning (or clear an *unclear*); two that name the same other language raise one (or confirm it). A confident dissent from the third model,
+   clearly English wording, or a rule-based reason overrides the agreement. Each warning shows three dots (one per model) and a ✓ when 2+ agree.
    Settings → *Confirmed only* shows nothing that a second model doesn't back.
 3. Page-level logic: sentence context, source-language comparison (hreflang), and the "mostly translated" fallback for very short strings.
+
+## Short words and look-alike languages
+Short strings such as "active", "archive", "contact" or "menu" are valid in several languages, so three models agreeing proves nothing.
+One such word on its own is shown as *unclear* (never as untranslated) unless it contains clearly English wording. A **phrase** of two words
+is different: when two models agree on the same other language and none of its words is one the target language also claims, it is untranslated
+("Order History", "Eliminar todo"), while "Archives actives" on a French page stays safe. An English claim that rests on accented letters
+("Pläne", "Privé", "Görsel") doesn't count as a vote. The language label is taken from function-word evidence, not from the model with the loudest guess. The "source" for comparison is only the page's English / `x-default`
+alternate, never another translation. Details are in `src/guard.js`, `src/lexicon.js` and `test/hardneg.mjs`.
+
+## Names
+People, places and brands read the same in every language, so they are neither translated nor untranslated. They get a verdict of their own
+(*name*): counted in the popup ("5 names"), never highlighted, never counted as unclear, and they don't change the score. A name is recognised
+from the built-in lists in `src/names.js` (given names, surnames, cities, brands), or because it is shaped like one (capitalised words that are
+not ordinary vocabulary) **and** the models cannot agree on any language for it, which is what names look like to a detector. Interface
+vocabulary such as "Order History" or "Wish List" is a *label*, not a name, and is still checked. German pages don't use the shape rule
+(German capitalises every noun). A single unknown capitalised word stays *unclear*.
+
+## Checking a site automatically
+Settings → *This site* → *Check … automatically* asks Chrome for access to that one site (one prompt) and then checks every page you open there.
+The choice is saved first and the background worker finishes the setup, so it also works if Chrome closes the popup while it shows the prompt.
+
+## After updating the extension
+Chrome keeps the previous version's page script running in tabs that were already open, and its highlights stay on the page. Every check
+(and *Clear*) now removes marks left by older copies, so the page only shows what the current check found. Reloading the tab is still the cleanest start.
 
 ## PDFs
 Open a PDF in the browser and click the toolbar icon → **Check PDF**. The file is downloaded by the extension, read with pdf.js and checked
