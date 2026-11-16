@@ -1,4 +1,4 @@
-# Translation Check 2.1
+# Translation Check 2.0.1
 
 Checks whether a web page **or a PDF open in the browser** is fully in the language you pick, and highlights what isn't.
 Load this folder in `chrome://extensions` (Developer mode → Load unpacked). Needs Chrome 114+.
