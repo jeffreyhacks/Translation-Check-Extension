@@ -15,6 +15,23 @@ const PATTERNS = [
 ];
 // International terms used untranslated inside sentences in almost every language.
 const INTL = new Set('admin dashboard playground feedback trainee trainees coach coaching onboarding workflow chatbot bot ai api app apps cloud server software hardware online offline login logout newsletter podcast webinar workshop meeting deadline download upload link links chat blog smartphone laptop tool tools team'.split(' '));
+// Names of languages (language switchers list "Turkish", "German", "Türkçe"…) are labels, never text to translate.
+const NAME_CODES = 'af am ar az be bg bn bs ca cs cy da de el en es et eu fa fi fil fr ga gl gu he hi hr hu hy id is it ja ka kk km kn ko lt lv mk ml mn mr ms my nb ne nl no pa pl pt ro ru si sk sl sq sr sv sw ta te th tl tr uk ur uz vi zh zu la eo'.split(' ');
+let LANG_NAMES = null;
+function langNames() {
+  if (LANG_NAMES) return LANG_NAMES;
+  LANG_NAMES = { en: new Set(), native: new Set() };
+  try {
+    const en = new Intl.DisplayNames(['en'], { type: 'language' });
+    for (const c of NAME_CODES) {
+      const e = en.of(c); if (e && e !== c) LANG_NAMES.en.add(e);
+      try { const n = new Intl.DisplayNames([c], { type: 'language' }).of(c); if (n && n !== c) LANG_NAMES.native.add(n.toLowerCase()); } catch (err) { /* unsupported */ }
+    }
+  } catch (err) { /* Intl.DisplayNames unavailable */ }
+  return LANG_NAMES;
+}
+const isLangName = (core) => { const n = langNames(); return n.en.has(core) || n.native.has(core.toLowerCase()); };
+
 const CAPITALISES_NOUNS = new Set(['de', 'lb']);
 const isCap = (c) => c.length >= 2 && /^\p{Lu}\p{Ll}/u.test(c);
 const SENTENCE_END = /[.!?:;。！？]$/;
@@ -44,6 +61,7 @@ export function mask(input, lang, termRe) {
     const core = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
     if (!core) continue;
     if (/\d/.test(core)) continue;                          // gpt-6-luna, 4K, mp3, v2, B2B
+    if (isLangName(core)) continue;                         // Turkish, German, Deutsch, Türkçe
     if (/[_@#\\]/.test(raw)) continue;                      // snake_case, @handles, #tags
     if (/\p{L}[.:]\p{L}/u.test(core)) continue;             // file.txt, example.com
     if (/\p{Ll}\p{Lu}/u.test(core)) continue;               // iPhone, YouTube, camelCase
@@ -65,6 +83,7 @@ export function mask(input, lang, termRe) {
 
   const removed = list.length < toks.length || s !== input;
   const nameLike = (list.length >= 2 && list.length <= 3 && list.every((k) => isCap(k.core))) ||
-                   (removed && list.length === 1 && isCap(list[0].core));
+                   (removed && list.length === 1 && isCap(list[0].core)) ||
+                   (list.length === 1 && /^\p{Lu}\p{L}{3,}(?:-\p{Lu}\p{L}{3,})+$/u.test(list[0].core)); // Garmisch-Partenkirchen, Saint-Étienne
   return { text: list.map((k) => k.core).join(' '), nameLike, removed };
 }

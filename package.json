@@ -1,12 +1,12 @@
 {
   "name": "translation-check",
-  "version": "2.1.0",
+  "version": "2.1.5",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
     "pretest": "npm run build",
-    "test": "node test/engine.test.mjs && node test/mask.test.mjs && node test/rules.test.mjs && node test/german.test.mjs && node test/verify.test.mjs && node test/pdf.test.mjs && node test/features.mjs && node test/popup.test.mjs"
+    "test": "node test/engine.test.mjs && node test/mask.test.mjs && node test/rules.test.mjs && node test/german.test.mjs && node test/falsepos.test.mjs && node test/hardneg.test.mjs && node test/verify.test.mjs && node test/names.test.mjs && node test/pdf.test.mjs && node test/features.mjs && node test/auto.test.mjs && node test/popup.test.mjs"
   },
   "dependencies": {
     "cld3-asm": "^4.0.0",

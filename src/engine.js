@@ -1,8 +1,9 @@
 // Language-judging engine. Pure logic (no DOM) so it can be unit-tested in Node.
 import { detectAll, supportedLanguages, toISO2 } from 'tinyld/heavy';
-import { EN_SINGLE, EN_FN } from './lexicon.js';
+import { EN_SINGLE, EN_FN, EN_WEAK } from './lexicon.js';
 import { stopHits, STOP } from './stopwords.js';
-export { EN_SINGLE, EN_FN };
+import { impossible } from './alphabet.js';
+export { EN_SINGLE, EN_FN, EN_WEAK };
 
 const TINY = new Set(supportedLanguages.map(toISO2));
 
@@ -38,6 +39,8 @@ const LOANWORDS = new Set('home menu email online blog login logout newsletter p
 
 const OK = { v: 'ok' };
 const UNSURE = { v: 'unsure' };
+// An undecided verdict that keeps tinyld's own head-to-head scores, so the verifier can count tinyld as an independent voter.
+const unsure = (sT, sO, other) => ({ v: 'unsure', sT, sO, other });
 const bad = (detected, reason) => ({ v: 'bad', detected, reason });
 
 function scriptShares(text) {
@@ -51,22 +54,50 @@ function scriptShares(text) {
 // so "bad" needs a clear gap, and anything ambiguous returns null (resolved later by context).
 function decide(sT, sO, other) {
   if (!sT && !sO) return null;
-  if (!sT) return sO >= 0.15 ? bad(other, 'Detected as another language') : null;
+  if (!sT) return sO >= 0.15 ? { ...bad(other, 'Detected as another language'), sT, sO } : null;
   if (!sO) return OK;
   const r = sT / sO;
   if (r >= 1.4) return OK;
-  if (sO - sT >= 0.12 && r <= 0.5) return bad(other, 'Detected as another language');
+  if (sO - sT >= 0.12 && r <= 0.5) return { ...bad(other, 'Detected as another language'), sT, sO };
   return null;
 }
 
 function englishScore(words) {
   const nonN = words.filter((w) => !NEUTRAL.has(w));
-  return { nonN, strong: nonN.filter((w) => EN_FN.has(w)).length };
+  const strong = nonN.filter((w) => EN_FN.has(w)).length;
+  // fully English = every word is English; cognates (EN_WEAK) are allowed only alongside at least one strong English word
+  const fully = nonN.length > 0 && strong >= 1 && nonN.every((w) => EN_FN.has(w) || EN_WEAK.has(w));
+  return { nonN, strong, fully };
 }
 
 
+// How much of a text is clearly English wording, and how much of it is the target language's own function words.
+export function englishHits(text, lang) {
+  const words = text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
+  const { strong } = englishScore(words);
+  return { strong, own: Math.max(...groupOf(lang).map((g) => stopHits(words, g))) };
+}
+/** Words of a short text on which the target language (or a relative) is still a real contender against `other`: a text made only of
+ *  words the target does NOT claim is foreign, but "Archives actives" has French in it even though the models call it English. */
+export function targetCompetes(text, lang, other, related = true) {
+  const eq = [...groupOf(lang), ...(related ? relatedOf(lang) : [])];
+  const only = [...new Set([...eq, other])].filter((l) => TINY.has(l));
+  if (!only.length || !other) return 0;
+  let n = 0;
+  for (const w of text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || []) {
+    let sT = 0, sO = 0;
+    for (const r of detectAll(w, { only })) { const l = norm(r.lang); if (eq.includes(l)) sT = Math.max(sT, r.accuracy); else if (l === other) sO = r.accuracy; }
+    if (sT > 0 && sT >= sO * 0.7) n++;
+  }
+  return n;
+}
+// Languages a real page is plausibly written in. A model naming anything else (Corsican for "Impostazioni generali", Luxembourgish for "Hans Müller")
+// is guessing, so its vote does not count.
+const LIKELY = new Set('en es fr de it pt nl sv da no fi pl cs sk hu ro bg hr el tr ru uk ar fa he ur hi bn ta te th vi id ms sw ja ko zh ca sr bs sl lt lv et is be mk sq hy ka eu gl af cy ga mt mr gu kn ml pa ne si km lo my mn az kk uz'.split(' '));
+export const plausible = (l) => LIKELY.has(l);
+
 // Name the language by function words when they clearly disagree with the model's guess (e.g. German reported as Hungarian).
-function relabel(words, guess) {
+export function relabel(words, guess) {
   let best = guess, hits = stopHits(words, guess);
   for (const l of Object.keys(STOP)) { const h = stopHits(words, l); if (h >= 2 && h > hits) { best = l; hits = h; } }
   return best;
@@ -130,8 +161,8 @@ export function createEngine(cld = async () => null) {
 
     if (words.length === 1 && LOANWORDS.has(words[0])) return OK;
     if (lang !== 'en') { // text made up entirely of English-only UI wording
-      const { nonN, strong } = englishScore(words);
-      if (nonN.length && strong === nonN.length && (nonN.length >= 2 || words.length >= 2 || EN_SINGLE.has(nonN[0]))) return bad('en', 'Looks like English text');
+      const { nonN, fully } = englishScore(words);
+      if (fully && (nonN.length >= 2 || words.length >= 2 || EN_SINGLE.has(nonN[0]))) return bad('en', 'Looks like English text');
     }
 
     if (tinyOK) {
@@ -162,6 +193,12 @@ export function createEngine(cld = async () => null) {
       }
     }
 
+    // Short text with clearly English wording and none of the target language's function words: trust the wording
+    // over a weak statistical tie (e.g. French "Save changes" scores as a near-cognate of French).
+    if (lang !== 'en' && words.length >= 2 && words.length <= 4) {
+      const { nonN, strong } = englishScore(words);
+      if (strong >= 1 && strong / nonN.length >= 0.5 && Math.max(...group.map((g) => stopHits(words, g))) === 0) return bad('en', 'Looks like English text');
+    }
     const v = decide(sT, sO, other);
     if (v) return v;
     // ambiguous scores: clear function words of another language and none of the target's are decisive
@@ -174,10 +211,10 @@ export function createEngine(cld = async () => null) {
       if (strong >= 1 && strong / nonN.length >= 0.5 && nonN.length >= 2) return bad('en', 'Looks like English text');
     }
     if (nonLatinTarget && words.length >= 4) return bad('latin', 'Latin-script text on a non-Latin page');
-    return UNSURE;
+    return unsure(sT, sO, other);
   }
 
-  async function classify(text, lang, ctx) {
+  async function classifyRaw(text, lang, ctx) {
     const tScripts = TARGET_SCRIPTS[lang] || ['latin'];
     const nonLatin = !tScripts.includes('latin');
     const sh = scriptShares(text);
@@ -186,6 +223,13 @@ export function createEngine(cld = async () => null) {
     if (nonLatin && sh.latin >= 0.5) return latin(text, lang, ctx, true);
     const dom = Object.entries(sh).sort((a, b) => b[1] - a[1])[0][0];
     return bad(dom, `Written in ${dom} script`);
+  }
+
+  // A claim of "this is language L" is dropped when the text has letters L doesn't have (English claims are exempt).
+  async function classify(text, lang, ctx) {
+    const v = await classifyRaw(text, lang, ctx);
+    if (v.v === 'bad' && v.detected && v.detected !== 'en' && impossible(text, norm(v.detected))) return { v: 'unsure', reason: 'Letters don’t fit the detected language' };
+    return v;
   }
 
   function dominant(texts) {
