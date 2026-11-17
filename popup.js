@@ -251,7 +251,14 @@ const loadScript = (src) => new Promise((ok, no) => { const s = document.createE
 async function fetchPdf(url) {
   const get = async () => { const r = await fetch(url, { credentials: 'include' }); if (!r.ok) throw new Error('HTTP ' + r.status); return new Uint8Array(await r.arrayBuffer()); };
   try { return await get(); } catch (e) {
-    if (/^file:/.test(url)) throw new Error('Local PDFs need “Allow access to file URLs” turned on for this extension in chrome://extensions.');
+    if (/^file:/.test(url)) { // reading a local file needs the file:///* host permission as well as "Allow access to file URLs": ask once, then retry
+      const allowed = await new Promise((r) => { try { api.extension.isAllowedFileSchemeAccess(r); } catch { r(true); } });
+      if (!allowed) throw new Error('Local PDFs need “Allow access to file URLs” turned on for this extension (open the extensions page, then Details).');
+      let granted = false;
+      try { granted = await api.permissions.request({ origins: ['file:///*'] }); } catch {}
+      if (granted) { try { return await get(); } catch {} }
+      throw new Error('Couldn’t read this local PDF: allow the extension to read local files when it asks.');
+    }
     if (/^https?:/.test(url)) { // ask once for access to this site, then retry
       let granted = false;
       try { granted = await api.permissions.request({ origins: [new URL(url).origin + '/*'] }); } catch {}

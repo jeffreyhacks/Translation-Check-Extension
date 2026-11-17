@@ -36,6 +36,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
     permissions: { request: (q) => { perms.push(q); return o.hold ? new Promise(() => {}) : Promise.resolve(permAnswer); }, remove: async (q) => { removed.push(q); return true; }, contains: async () => contains },
     runtime: { onMessage: { addListener: (f) => (msgL = f) }, getURL: (p) => 'chrome-extension://abc/' + p, sendMessage: async (m) => { runtimeSent.push(m); return {}; } },
     sidePanel: { open: async () => {} },
+    extension: { isAllowedFileSchemeAccess: (cb) => cb(o.fileAccess !== false) },
   };
   if (o.noScripting) { // Vivaldi: the popup has no chrome.scripting; injection goes through the background worker
     delete w.chrome.scripting;
@@ -56,7 +57,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
   w.pdfjsLib = { GlobalWorkerOptions: {} };
   const pdfCalls = [];
   w.TCPDF = { analyzePdf: async (o) => { pdfCalls.push(o); o.onProgress({ stage: 'read', page: 1, pages: 12 }); return PDF_RESULT; } };
-  w.fetch = async () => (fetchOk ? { ok: true, arrayBuffer: async () => new Uint8Array([37, 80, 68, 70]).buffer } : { ok: false, status: 403 });
+  w.fetch = async () => (fetchOk || (o.fileGrantFixes && perms.some((q) => q.origins[0] === 'file:///*') && permAnswer) ? { ok: true, arrayBuffer: async () => new Uint8Array([37, 80, 68, 70]).buffer } : { ok: false, status: 403 });
   w.eval(fs.readFileSync('popup.js', 'utf8'));
   await sleep(50);
   return { w, d: w.document, store, sent, reg, downloads, updates, clip, perms, removed, pdfCalls, runtimeSent, denyPerms: () => (permAnswer = false), failFetch: () => (fetchOk = false), msg: (m, s) => msgL(m, s), $: (s) => w.document.querySelector(s) };
@@ -197,9 +198,16 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   p.failFetch();
   p.$('#scan').click(); await sleep(80);
   t('pdf popup: blocked download asks for site access once, then explains', p.perms.length === 1 && p.perms[0].origins[0] === 'https://docs.example.org/*' && /Couldn’t download this PDF/.test(p.$('#status').textContent), p.$('#status').textContent);
-  const f = await boot('popup.html', 'file:///C:/docs/local.pdf');
+  const f = await boot('popup.html', 'file:///C:/docs/local.pdf', { fileAccess: false });
   f.failFetch(); f.$('#scan').click(); await sleep(80);
-  t('pdf popup: local files explain the file-access switch', /Allow access to file URLs/.test(f.$('#status').textContent), f.$('#status').textContent);
+  t('pdf popup: local files explain the file-access switch when it is off', /Allow access to file URLs/.test(f.$('#status').textContent) && !f.perms.length, f.$('#status').textContent);
+  // switch on, but Chrome also needs the file:///* host permission to read the file (verified in real Chrome): ask once, then read it
+  const g = await boot('popup.html', 'file:///C:/docs/local.pdf', { fileGrantFixes: true });
+  g.failFetch(); g.$('#scan').click(); await sleep(100);
+  t('pdf popup: local PDF asks for file:///* once, then is checked', g.perms.length === 1 && g.perms[0].origins[0] === 'file:///*' && g.pdfCalls.length === 1 && !g.$('#result').hidden, g.$('#status').textContent);
+  const h = await boot('popup.html', 'file:///C:/docs/local.pdf', { fileGrantFixes: true });
+  h.failFetch(); h.denyPerms(); h.$('#scan').click(); await sleep(100);
+  t('pdf popup: refusing local-file access explains what to allow', /allow the extension to read local files/.test(h.$('#status').textContent) && !h.pdfCalls.length, h.$('#status').textContent);
 }
 // ---- searchable language picker ----
 {

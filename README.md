@@ -54,7 +54,8 @@ Chrome keeps the previous version's page script running in tabs that were alread
 ## PDFs
 Open a PDF in the browser and click the toolbar icon → **Check PDF**. The file is downloaded by the extension, read with pdf.js and checked
 with the same pipeline. Clicking an issue jumps to its page and copies the snippet so you can press Ctrl+F. Scanned (image-only) PDFs have no text to check.
-Local `file://` PDFs need "Allow access to file URLs" on the extension's details page.
+Local `file://` PDFs need "Allow access to file URLs" on the extension's details page, and Chrome also needs the `file:///*` host permission
+to let the extension read the file: the first local PDF asks for it once (optional permission, nothing extra at install).
 
 ## Layout
 - `background.js` – service worker: the language models (loaded once for the whole browser).
