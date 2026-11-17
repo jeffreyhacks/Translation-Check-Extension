@@ -33,6 +33,15 @@ let fp = [];
 for (const [l, s] of Object.entries(HARD)) for (const t of s.split('|')) if (looksEnglish(t, l)) fp.push(`${l}:${t}`);
 check('dictionary rule: no hard negative is called English', !fp.length, fp.join(', '));
 
+// English page (strict mode report): short English labels the models can't place are confirmed by the dictionary; foreign text is still flagged
+{
+  const fine = ['Analyzing conversation transcript', 'Command Center', 'Configuration', 'Quick start', 'Scenarios', 'Tutorials', 'Avatars', 'Rubrics', 'Reports'];
+  const foreign = ['Paramètres du compte', 'Einstellungen speichern', 'Guardar cambios', 'Mot de passe oublié', 'Konto löschen', 'Willkommen zurück', 'Rapport détaillé', 'Analyse de la conversation'];
+  const v = await judge('en', [...fine, ...foreign]);
+  fine.forEach((t, i) => check(`en page: "${t}" is English, not "can't tell"`, v[i].v === 'ok', JSON.stringify(v[i])));
+  foreign.forEach((t, i) => check(`en page: "${t}" is still flagged`, v[fine.length + i].v === 'bad', JSON.stringify(v[fine.length + i])));
+}
+
 // Dates with month names are formatted values, not text
 for (const [t, l] of [['10. Nov. 2026', 'de'], ['6. Nov. 2026', 'de'], ['Dienstag, 10. November 2026', 'de'], ['10 nov. 2026', 'fr'], ['Nov 10, 2026', 'fr'],
   ['10 de noviembre de 2026', 'es'], ['10 listopada 2026', 'pl'], ['10 нояб. 2026 г.', 'ru'], ['10 Kasım 2026', 'tr'], ['November 2026', 'nl']]) {
