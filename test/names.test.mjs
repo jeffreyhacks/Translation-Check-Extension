@@ -105,5 +105,16 @@ t('page: names are counted, not highlighted', r.stats.nameN >= 1 && !r.issues.so
 t('page: names do not lower the score or add warnings', r.score === 100 && r.stats.badN === 0, JSON.stringify({ score: r.score, bad: r.stats.badN }));
 t('page: names are not counted as "unclear" either', r.stats.unsureN === 0, JSON.stringify(r.stats));
 
+// Persona names on a Malaysian app (single first names, Malay names, a title + name), on French and on German pages
+{
+  const people = ['Lou', 'Alex', 'Alex Rivera', 'Rosli', 'Senior Commander Rosli', 'Priya', 'Siti', 'Nurul Huda', 'Aisha Rahman', 'Ahmad Faiz'];
+  for (const lang of ['fr', 'de']) {
+    const res = await send({ type: 'tc-classify', lang, texts: people.map((x) => mask(x, lang).text), ctxTexts: [] });
+    const left = people.filter((x, i) => res.verdicts[i].v !== 'name' && res.verdicts[i].v !== 'ok');
+    t(`persona names (${lang}): none is left unclear or flagged`, !left.length, JSON.stringify(left));
+  }
+  for (const w of ['Will', 'Grace', 'Hope']) t(`name list: the English word "${w}" is not a known name`, !knownName(w));
+}
+
 console.log(`\nnames: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

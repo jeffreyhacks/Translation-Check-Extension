@@ -6,6 +6,7 @@
 //                     names (each model guesses something different), unlike a real leftover, which they agree on.
 import { EN_FN, EN_WEAK, EN_SINGLE } from './lexicon.js';
 import { STOP } from './stopwords.js';
+import { GIVEN_NAMES, FAMILY_NAMES } from './namelists.js';
 
 const fold = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 const bag = (s) => new Set(s.trim().split(/\s+/).map(fold));
@@ -34,6 +35,13 @@ const GIVEN = bag(`james john robert michael william david richard joseph thomas
   olga ivan dmitri dmitry sergei sergey vladimir nikolai alexei natalia tatiana svetlana irina anastasia ekaterina
   wei yuki hiroshi takashi kenji sakura haruka yui akira satoshi minjun jiwoo
   giorgos nikos dimitris eleni sven henrik johan jonas niklas kristian ingrid astrid freya`);
+// Common Malay given names and name parts (not in faker's lists).
+const MALAY = bag(`rosli roslan rosnah rozita azman azizah aziz faridah zainal zulkifli hafiz haziq hakim amirul aiman syafiq izzat irfan farah nabila aina
+  hidayah syahirah norazlina shahrul khairul fadzil fadzilah mohd muhd muhammad nur nurul siti noor norhayati noraini rohani rahimah zaleha suhaimi
+  shafie hisham kamarul faizal fauzi azlan azhar azri razak rashid rahman ramli redzuan ridzuan saiful salleh shamsul sulaiman zaki zakaria zulaikha
+  hasnah hashim halim harith haris hanis hannah atiqah aqilah balqis batrisya danial darwisy fatin firdaus hairul hazwan ikhwan imran izzati liyana
+  mazlan nazri nizam qistina rafidah rusli safwan sharifah syed tengku wan megat puteri yusof yusri zahid zamri zarina
+  alex lou priya siti`); // short names the word filter in scripts/wordlists.mjs drops (they are also words somewhere)
 const SURNAME = bag(`smith johnson williams jones garcia davis rodriguez martinez hernandez lopez gonzalez wilson anderson taylor moore jackson martin lee thompson
   harris sanchez clark ramirez lewis robinson walker allen torres nguyen flores adams nelson rivera campbell mitchell roberts carter doe roe
   muller mueller schmidt schneider fischer weber meyer meier wagner becker schulz hoffmann schafer hartmann schmitt werner krause lehmann neumann zimmermann kruger
@@ -66,6 +74,8 @@ const BRAND = bag(`google apple microsoft amazon facebook meta instagram whatsap
   playstation xbox nintendo ikea nike adidas puma zara lidl aldi tesco carrefour siemens bosch volkswagen mercedes porsche toyota honda nissan hyundai renault peugeot
   citroen fiat ferrari lamborghini nestle unilever shell paypal visa mastercard klarna revolut trello asana jira confluence atlassian cloudflare vercel netlify heroku
   digitalocean`);
+for (const w of [...MALAY, ...GIVEN_NAMES.split(' ')]) GIVEN.add(w);
+for (const w of FAMILY_NAMES.split(' ')) SURNAME.add(w);
 const COMPANY = bag('cloud labs lab studio studios bank group systems technologies technology solutions software holdings partners ventures capital media digital park airlines airways motors foods');
 // People's names have lowercase particles inside them: "Rio de Janeiro", "Ludwig van Beethoven", "Ahmed bin Rashid".
 const PARTICLE = bag('de da di do dos das del della degli van von der den la le el al bin ibn ben bint af av ter');

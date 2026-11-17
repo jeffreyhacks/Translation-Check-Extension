@@ -16,6 +16,8 @@
     "tinyld": "^1.3.4"
   },
   "devDependencies": {
+    "@faker-js/faker": "^10.6.0",
+    "all-the-german-words": "^1.1.0",
     "an-array-of-dutch-words": "^0.0.0-development",
     "an-array-of-french-words": "^2.0.0",
     "an-array-of-german-words": "^1.2.0",

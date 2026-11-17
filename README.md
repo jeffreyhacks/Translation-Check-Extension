@@ -34,7 +34,7 @@ dates. With *Format hints* on, a date whose month name is English and not also t
 ## Names
 People, places and brands read the same in every language, so they are neither translated nor untranslated. They get a verdict of their own
 (*name*): counted in the popup ("5 names"), never highlighted, never counted as unclear, and they don't change the score. A name is recognised
-from the built-in lists in `src/names.js` (given names, surnames, cities, brands), or because it is shaped like one (capitalised words that are
+from the built-in lists in `src/names.js` (given names, surnames, cities, brands; about 13,000 given names and 13,000 surnames from 70 locales are generated into `src/namelists.js`, with ordinary words such as "Will" or "Grace" left out, plus common Malay names), or because it is shaped like one (capitalised words that are
 not ordinary vocabulary) **and** the models cannot agree on any language for it, which is what names look like to a detector. Interface
 vocabulary such as "Order History" or "Wish List" is a *label*, not a name, and is still checked. German pages don't use the shape rule
 (German capitalises every noun). A single unknown capitalised word stays *unclear*.
