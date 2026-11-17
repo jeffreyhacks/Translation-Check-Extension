@@ -1,4 +1,4 @@
-# Translation Check 2.0.3
+# Translation Check 2.0.4
 
 Checks whether a web page **or a PDF open in the browser** is fully in the language you pick, and highlights what isn't.
 Load this folder in `chrome://extensions` (Developer mode → Load unpacked). Needs Chrome 114+.
@@ -27,6 +27,10 @@ Two or three cognate-heavy words ("Enthusiastic, decisive", "Aggressive, Defensi
 English-only words make up at least half of it and none of its words belongs only to the target. A single word needs 9+ letters and tinyld's
 agreement. Word lists exist for fr, de, es, it, pt and nl (`npm run wordlists` regenerates `src/wordlists.js`); other languages fall back to tinyld.
 
+On an **English** page the same dictionary works the other way: text whose words are all everyday English ("Command Center", "Rubrics",
+"Analyzing conversation transcript") is English, even when the models can't agree on two or three words. Short words must be English
+ones, so "Analyse de la conversation" is still flagged.
+
 ## Dates
 Dates written with month names ("10. Nov. 2026", "Nov 10, 2026", "10 de noviembre de 2026") are formatted values and are ignored, like numeric
 dates. With *Format hints* on, a date whose month name is English and not also the page language's ("Dec 3" on a German page) gets a hint.
@@ -50,7 +54,8 @@ Chrome keeps the previous version's page script running in tabs that were alread
 ## PDFs
 Open a PDF in the browser and click the toolbar icon → **Check PDF**. The file is downloaded by the extension, read with pdf.js and checked
 with the same pipeline. Clicking an issue jumps to its page and copies the snippet so you can press Ctrl+F. Scanned (image-only) PDFs have no text to check.
-Local `file://` PDFs need "Allow access to file URLs" on the extension's details page.
+Local `file://` PDFs need "Allow access to file URLs" on the extension's details page, and Chrome also needs the `file:///*` host permission
+to let the extension read the file: the first local PDF asks for it once (optional permission, nothing extra at install).
 
 ## Layout
 - `background.js` – service worker: the language models (loaded once for the whole browser).

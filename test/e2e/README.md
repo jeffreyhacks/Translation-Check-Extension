@@ -12,3 +12,4 @@ Other scripts in this folder (same setup): `picker.py` – searchable language l
 `ghost.py` – highlights left on a page by an older copy of the extension are removed by a new check (pixel-checked from real screenshots).
 `names.py` – names are counted and never highlighted, while English interface labels next to them still are (pixel-checked).
 `auto.py` – "check this site automatically" against Chrome's real permission validation (unmodified manifest) and end to end, plus the logo in both themes.
+`localpdf.py` – a PDF opened from disk (`file://`): local-file access is asked for in the click, the file is checked, and no "Not allowed to load local resource" error is logged.

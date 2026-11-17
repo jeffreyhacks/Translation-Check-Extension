@@ -3,7 +3,7 @@ import { detectAll, supportedLanguages, toISO2 } from 'tinyld/heavy';
 import { EN_SINGLE, EN_FN, EN_WEAK } from './lexicon.js';
 import { stopHits, STOP } from './stopwords.js';
 import { impossible } from './alphabet.js';
-import { looksEnglish } from './english.js';
+import { looksEnglish, allEnglish } from './english.js';
 export { EN_SINGLE, EN_FN, EN_WEAK };
 
 const TINY = new Set(supportedLanguages.map(toISO2));
@@ -161,6 +161,8 @@ export function createEngine(cld = async () => null) {
     let sT = 0, sO = 0, other = '';
 
     if (words.length === 1 && LOANWORDS.has(words[0])) return OK;
+    // English page: if every word is in the English dictionary, the text is English, whatever the models make of a few words
+    if (lang === 'en' && allEnglish(text)) return OK;
     if (lang !== 'en') { // text made up entirely of English-only UI wording
       const { nonN, fully } = englishScore(words);
       if (fully && (nonN.length >= 2 || words.length >= 2 || EN_SINGLE.has(nonN[0]))) return bad('en', 'Looks like English text');
