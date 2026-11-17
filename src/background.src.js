@@ -4,6 +4,7 @@ import { createEngine } from './engine.js';
 import { createVerifier } from './verify.js';
 import { guardShort } from './guard.js';
 import { knownName, nameShape, isLabel } from './names.js';
+import { allEnglish } from './english.js';
 
 const api = globalThis.chrome;
 const CAPITALISES = new Set(['de', 'lb']); // German capitalises every noun, so a capitalised phrase there says nothing about names
@@ -33,6 +34,8 @@ async function classify({ lang, texts = [], ctxTexts = [], htmlLang, related, ct
       if (kind) { verdicts[k] = { v: 'name', reason: 'Looks like a name', kind }; continue; }
       if (verify !== false) v = await verifier.verify(texts[k], lang, v, c.related, { shape: !CAPITALISES.has(lang) && nameShape(texts[k]) });
       v = guardShort(texts[k], v, lang, c.related);
+      // an unclear text made only of English words must not be cleared later by its section's verdict on a non-English page
+      if (v.v === 'unsure' && lang !== 'en' && allEnglish(texts[k])) v = { ...v, enVocab: true };
       verdicts[k] = v.v === 'bad' && isLabel(texts[k]) ? { ...v, label: true } : v; // a warning on plain interface words is not a name, whatever its capitals say
     }
   }));

@@ -1,4 +1,4 @@
-# Translation Check 2.0.4
+# Translation Check 2.0.5
 
 Checks whether a web page **or a PDF open in the browser** is fully in the language you pick, and highlights what isn't.
 Load this folder in `chrome://extensions` (Developer mode → Load unpacked). Needs Chrome 114+.
@@ -30,6 +30,12 @@ agreement. Word lists exist for fr, de, es, it, pt and nl (`npm run wordlists` r
 On an **English** page the same dictionary works the other way: text whose words are all everyday English ("Command Center", "Rubrics",
 "Analyzing conversation transcript") is English, even when the models can't agree on two or three words. Short words must be English
 ones, so "Analyse de la conversation" is still flagged.
+
+## Lone words: read with their section
+A single word with no sentence around it ("Empathie" alone in a card) is too short for the models. When it stays unclear, it is read with
+its section: the nearest container whose other text is long enough (80+ letters). If that text is clearly in the page's language, the word
+is counted as translated. It never is when the word is plain English on a non-English page ("Settings" in a German menu) or when two models
+read it as another language.
 
 ## Dates
 Dates written with month names ("10. Nov. 2026", "Nov 10, 2026", "10 de noviembre de 2026") are formatted values and are ignored, like numeric

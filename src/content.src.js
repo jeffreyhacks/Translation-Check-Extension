@@ -139,6 +139,30 @@ import { detectBug, formatHints } from './rules.js';
     return text;
   }
 
+  // The nearest section around a lone label: climb from its element until the other text there (the label itself left out) is enough for the
+  // models to read, e.g. the other cards of a list, the rest of a form or panel. Used when a single word has no sentence around it.
+  const SECTION_MIN = 80, SECTION_MAX = 600;
+  function sectionFor(el, self) {
+    if (!el) return null;
+    let anc = el;
+    for (let depth = 0; depth < 8; depth++) {
+      anc = anc.parentElement;
+      if (!anc || anc.tagName === 'BODY' || anc.tagName === 'HTML') return null;
+      const parts = [];
+      let len = 0, letters = 0;
+      const tw = document.createTreeWalker(anc, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => (n === self || el.contains(n) || SKIP.has(n.parentElement?.tagName?.toUpperCase()) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+      });
+      for (let n = tw.nextNode(); n && len < SECTION_MAX; n = tw.nextNode()) {
+        const t = clean(n.nodeValue);
+        if (!t) continue;
+        parts.push(t); len += t.length + 2; letters += (t.match(/\p{L}/gu) || []).length;
+      }
+      if (letters >= SECTION_MIN) return parts.join('. ').slice(0, SECTION_MAX);
+    }
+    return null;
+  }
+
   // ---------- Judging (via the background model, with a per-page verdict cache) ----------
   const ck = (t) => `${state.p.lang}|${state.p.related ? 1 : 0}|${state.p.verify ? 1 : 0}|${(state.ctx?.sources || []).join(',')}|${t}`;
 
@@ -230,6 +254,19 @@ import { detectBug, formatHints } from './rules.js';
     }
     await classifyTexts([...ctxFor.values()]);
     for (const [it, c] of ctxFor) { const vc = vcache.get(ck(c)); if (vc.v !== 'unsure') it.base = { ...vc, via: 'context' }; }
+    // pass 2b: a lone word or label still unclear ("Empathie" alone in a card) is read with its section. If the section around it is clearly in
+    // the page's language, the label is too, unless it is plain English on a non-English page or two models read it as another language.
+    const secFor = new Map();
+    for (const it of todo) {
+      if (it.base.v !== 'unsure' || it.base.enVocab || it.base.via) continue;
+      const v = it.base.votes, other = v ? ['cld3', 'franc', 'tinyld'].filter((k) => v[k] === 'other').length : 0;
+      if (other >= 2) continue;
+      const raw = it.kind === 'attr' ? sectionFor(it.el, null) : sectionFor(it.node.parentElement, it.node);
+      const c = raw && mask(raw, state.p.lang, state.termRe).text;
+      if (c && (c.match(/\p{L}/gu) || []).length >= SECTION_MIN) secFor.set(it, c);
+    }
+    await classifyTexts([...new Set(secFor.values())]);
+    for (const [it, c] of secFor) { if (vcache.get(ck(c))?.v === 'ok') it.base = { v: 'ok', via: 'section' }; }
     // pass 3: still unclear but identical to the source-language page → almost certainly untranslated
     const src = state.sourceInfo.status === 'used' ? state.source : null;
     if (src) {
