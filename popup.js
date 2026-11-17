@@ -248,17 +248,20 @@ function setLang(v) { $('#lang').value = v; picker.sync(); }
 // ---------- Scan (web page or PDF) ----------
 const loadScript = (src) => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => no(new Error('Could not load ' + src)); document.head.append(s); });
 
-async function fetchPdf(url) {
+// A local file needs "Allow access to file URLs" AND the optional file:///* host permission. The permission is requested in the click
+// itself (see the Check button), because browsers only allow permission requests right after a click; the file is read only once both are
+// in place, so no refused read is logged as an error.
+async function fetchPdf(url, fileGrant) {
   const get = async () => { const r = await fetch(url, { credentials: 'include' }); if (!r.ok) throw new Error('HTTP ' + r.status); return new Uint8Array(await r.arrayBuffer()); };
+  if (/^file:/.test(url)) {
+    const allowed = await new Promise((r) => { try { api.extension.isAllowedFileSchemeAccess(r); } catch { r(true); } });
+    if (!allowed) throw new Error('Local PDFs need “Allow access to file URLs” turned on for this extension (open the extensions page, then Details).');
+    let granted = false;
+    try { granted = await (fileGrant || api.permissions.contains({ origins: ['file:///*'] })); } catch {}
+    if (!granted) throw new Error('Couldn’t read this local PDF: click Check PDF again and allow the extension to read local files.');
+    try { return await get(); } catch { throw new Error('Couldn’t read this local PDF.'); }
+  }
   try { return await get(); } catch (e) {
-    if (/^file:/.test(url)) { // reading a local file needs the file:///* host permission as well as "Allow access to file URLs": ask once, then retry
-      const allowed = await new Promise((r) => { try { api.extension.isAllowedFileSchemeAccess(r); } catch { r(true); } });
-      if (!allowed) throw new Error('Local PDFs need “Allow access to file URLs” turned on for this extension (open the extensions page, then Details).');
-      let granted = false;
-      try { granted = await api.permissions.request({ origins: ['file:///*'] }); } catch {}
-      if (granted) { try { return await get(); } catch {} }
-      throw new Error('Couldn’t read this local PDF: allow the extension to read local files when it asks.');
-    }
     if (/^https?:/.test(url)) { // ask once for access to this site, then retry
       let granted = false;
       try { granted = await api.permissions.request({ origins: [new URL(url).origin + '/*'] }); } catch {}
@@ -268,11 +271,11 @@ async function fetchPdf(url) {
   }
 }
 
-async function runPdf() {
+async function runPdf(fileGrant) {
   await loadScript('vendor/pdf.min.js');
   await loadScript('pdfcheck.js');
   window.pdfjsLib.GlobalWorkerOptions.workerSrc = api.runtime.getURL('vendor/pdf.worker.min.js');
-  const data = await fetchPdf(tabUrl);
+  const data = await fetchPdf(tabUrl, fileGrant);
   const res = await window.TCPDF.analyzePdf({
     pdfjs: window.pdfjsLib, data, params: options(), send: (m) => api.runtime.sendMessage(m),
     onProgress: (e) => setStatus(e.stage === 'read' ? `Reading page ${e.page} of ${e.pages}…` : 'Checking text…'),
@@ -281,13 +284,13 @@ async function runPdf() {
   return res;
 }
 
-async function runScan({ keepView = false } = {}) {
+async function runScan({ keepView = false, fileGrant } = {}) {
   const btn = $('#scan');
   btn.disabled = true;
   setStatus('Checking…');
   try {
     let res;
-    if (isPdf) res = await runPdf();
+    if (isPdf) res = await runPdf(fileGrant);
     else { await ensureInjected(); res = await send({ type: 'scan', ...options() }); }
     if (res?.error) throw new Error(res.error);
     result = res; view = keepView ? view : 'bad'; cursor = -1; // after Ignore the person stays on the list they were working in
@@ -301,7 +304,12 @@ async function runScan({ keepView = false } = {}) {
       : m, true);
   } finally { btn.disabled = false; }
 }
-$('#scan').onclick = () => runScan();
+$('#scan').onclick = () => {
+  // Local PDF: ask for local-file access now, while this is still the click (no-op once granted). Done before any await on purpose.
+  let fileGrant;
+  if (isPdf && /^file:/.test(tabUrl)) { try { fileGrant = Promise.resolve(api.permissions.request({ origins: ['file:///*'] })).catch(() => false); } catch { fileGrant = Promise.resolve(false); } }
+  return runScan({ fileGrant });
+};
 $('#clear').onclick = async () => { if (!isPdf) { try { await send({ type: 'clear' }); } catch {} } result = null; render(); setStatus(''); };
 
 // ---------- Settings drawer ----------
