@@ -47,7 +47,18 @@ const storable = () => ({ lang: $('#lang').value, mode: mode(), attrs: $('#attrs
 const options = () => ({ ...storable(), ignore: [...ign.global, ...(ign.sites[host] || [])] });
 const save = () => api.storage.local.set({ opts: storable(), ignore: ign, autoSites });
 const send = (msg) => api.tabs.sendMessage(tabId, msg);
-const ensureInjected = () => api.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+// Browser pages (vivaldi:, chrome:, edge:, opera:, about:...) can never be scripted by an extension.
+const BROWSER_PAGE = /^(?:chrome|chrome-extension|chrome-search|chrome-untrusted|devtools|edge|brave|opera|vivaldi|about|view-source|extension|moz-extension):/i;
+// The popup injects the page script itself when it can. Some Chromium browsers (Vivaldi) don't give the popup `chrome.scripting`, so the
+// background worker, which always has it, does the injection instead.
+async function ensureInjected() {
+  if (BROWSER_PAGE.test(tabUrl)) throw new Error('chrome: browser page');
+  const scripting = api.scripting || globalThis.chrome?.scripting;
+  if (scripting?.executeScript) return scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+  const r = await api.runtime.sendMessage({ type: 'tc-inject', tabId });
+  if (!r || r.error) throw new Error(r?.error || 'The extension could not load its page script. Reload the extension and try again.');
+  return r;
+}
 
 // ---------- Rendering ----------
 const rowsNow = () => (result ? result.issues.filter((i) => i.verdict === view) : []);
@@ -278,7 +289,7 @@ async function runScan({ keepView = false } = {}) {
   } catch (e) {
     result = null; render();
     const m = String(e.message || e);
-    setStatus(/Cannot access|extensions gallery|chrome:|activeTab|permission/i.test(m) && !isPdf
+    setStatus(/Cannot access|extensions gallery|chrome:|activeTab|permission|cannot be scripted/i.test(m) && !isPdf
       ? (IS_PANEL ? 'Click the toolbar icon on this tab once to allow checking it.' : 'This page can’t be checked (browser or store page).')
       : m, true);
   } finally { btn.disabled = false; }
