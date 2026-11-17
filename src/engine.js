@@ -3,6 +3,7 @@ import { detectAll, supportedLanguages, toISO2 } from 'tinyld/heavy';
 import { EN_SINGLE, EN_FN, EN_WEAK } from './lexicon.js';
 import { stopHits, STOP } from './stopwords.js';
 import { impossible } from './alphabet.js';
+import { looksEnglish } from './english.js';
 export { EN_SINGLE, EN_FN, EN_WEAK };
 
 const TINY = new Set(supportedLanguages.map(toISO2));
@@ -163,6 +164,8 @@ export function createEngine(cld = async () => null) {
     if (lang !== 'en') { // text made up entirely of English-only UI wording
       const { nonN, fully } = englishScore(words);
       if (fully && (nonN.length >= 2 || words.length >= 2 || EN_SINGLE.has(nonN[0]))) return bad('en', 'Looks like English text');
+      // everyday English words that are not words of the target language ("Enthusiastic, decisive" on a French page)
+      if (words.length <= 12 && looksEnglish(text, lang)) return bad('en', 'Looks like English text');
     }
 
     if (tinyOK) {

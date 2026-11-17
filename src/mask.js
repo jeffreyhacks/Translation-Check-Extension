@@ -1,6 +1,7 @@
 // Removes things that should never be "translated": numbers, durations, versions, codes,
 // model/product identifiers, URLs, acronyms, brand names. What's left is the translatable text.
 import { EN_FN } from './lexicon.js';
+import { dateRe } from './dates.js';
 
 const UNITS = 'ms|secs?|s|mins?|m|hrs?|h|d|w|y|b|kb|mb|gb|tb|kib|mib|gib|k|km|cm|mm|kg|g|mg|ml|l|fps|hz|khz|mhz|ghz|px|pt|em|rem|x|dpi|bpm|rpm|mbps|kbps|gbps|kw|kwh|mah|mp|v|°c|°f|°|%';
 const PATTERNS = [
@@ -48,6 +49,8 @@ export function compileTerms(terms) {
 export function mask(input, lang, termRe) {
   let s = input;
   if (termRe) s = s.replace(termRe, ' ');
+  const dates = dateRe(lang); // "10. Nov. 2026", "Nov 10, 2026": formatted by the app, never text to translate
+  if (dates) s = s.replace(dates, ' ');
   for (const re of PATTERNS) s = s.replace(re, ' ');
   const upperAll = input === input.toUpperCase() && /\s/.test(input.trim()); // SHOUTED sentences: don't treat words as acronyms
 

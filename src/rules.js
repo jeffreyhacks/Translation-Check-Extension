@@ -1,3 +1,4 @@
+import { englishMonths } from './dates.js';
 // Rules that don't need a language model: leaked translation keys / broken placeholders,
 // and number/date formatting hints. Pure functions, easy to unit-test.
 
@@ -63,6 +64,8 @@ export function formatHints(text, lang) {
   if (L.dec === '.' && (/[€$£]\s?\d+,\d{2}\b/.test(text) || /\b\d+,\d{2}\s?[€$£]/.test(text))) {
     out.push(`Price uses a comma as decimal separator; ${lang} uses a period`);
   }
+  const em = englishMonths(text, lang);
+  if (em.length) out.push(`Date uses an English month name (${em.join(', ')})`);
   const d = text.match(/\b\d{1,2}([/.-])\d{1,2}\1\d{4}\b/);
   if (d && d[1] !== L.dsep) out.push(`Date written with "${d[1]}"; ${lang} usually uses "${L.dsep}"`);
   return out;
