@@ -7,7 +7,7 @@ import { detectBug, formatHints } from './rules.js';
 (() => {
   if (window.__tcLoaded) return;
   window.__tcLoaded = true;
-  const api = globalThis.browser ?? globalThis.chrome;
+  const api = globalThis.chrome?.runtime?.id ? globalThis.chrome : (globalThis.browser ?? globalThis.chrome); // see popup.js
 
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE', 'PRE', 'KBD', 'SAMP', 'TEXTAREA', 'SVG', 'MATH', 'TEMPLATE', 'IFRAME', 'CANVAS']);
   const SKIP_SEL = 'script,style,noscript,code,pre,kbd,samp,textarea,svg,math,template,iframe,canvas';

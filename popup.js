@@ -1,4 +1,6 @@
-const api = globalThis.browser ?? chrome;
+// Chromium's own namespace has everything this extension uses (scripting, sidePanel...). Some browsers also define a partial `browser`
+// object, so `browser` is only used when there is no usable `chrome` (Firefox).
+const api = globalThis.chrome?.runtime?.id ? globalThis.chrome : (globalThis.browser ?? globalThis.chrome);
 const $ = (s) => document.querySelector(s);
 const IS_PANEL = document.body.classList.contains('panel');
 const LANGS = 'en es fr de it pt nl sv da no fi pl cs sk hu ro bg hr el tr ru uk ar fa he ur hi bn ta te th vi id ms sw ja ko zh ca'.split(' ');
