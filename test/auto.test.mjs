@@ -14,6 +14,7 @@ function worker({ autoSites = [], granted = [], scripts = [] } = {}) {
     permissions: { contains: async ({ origins }) => { if (origins.some((o) => /\s/.test(o))) throw new Error('Invalid value for origin pattern'); return origins.every((o) => st.granted.has(o)); },
       onAdded: { addListener: (f) => L.added.push(f) }, onRemoved: { addListener: (f) => L.removed.push(f) } },
     scripting: {
+      executeScript: async (o) => { st.injected = (st.injected || []).concat(o); if (o.target.tabId === 99) throw new Error('Cannot access contents of the page'); },
       getRegisteredContentScripts: async () => st.scripts.map((x) => ({ ...x })),
       registerContentScripts: async (a) => { st.calls.register++; st.scripts.push(...a.map((x) => ({ ...x }))); },
       unregisterContentScripts: async ({ ids }) => { st.calls.unregister++; st.scripts = st.scripts.filter((x) => !ids.includes(x.id)); },
@@ -58,6 +59,14 @@ function worker({ autoSites = [], granted = [], scripts = [] } = {}) {
   const s = worker({ autoSites: ['ok.example.com'], granted: ['https://ok.example.com/*'] });
   s.L.startup.forEach((f) => f()); s.L.installed.forEach((f) => f({})); await sleep(60);
   t('auto: registrations are restored on browser start and after an update', s.st.scripts.length === 1 && s.st.calls.register === 1, JSON.stringify(s.st.calls));
+}
+{
+  const w = worker();
+  const inject = (tabId) => new Promise((res) => w.L.message({ type: 'tc-inject', tabId }, {}, res));
+  const ok = await inject(7);
+  t('inject: the worker loads the page script into the tab for the popup', ok.ok === true && w.st.injected[0].target.tabId === 7 && w.st.injected[0].files.join() === 'content.js', JSON.stringify(ok));
+  const no = await inject(99);
+  t('inject: a refused tab reports the browser\'s error', /Cannot access/.test(no.error || ''), JSON.stringify(no));
 }
 console.log(`\nauto-check worker: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

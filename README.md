@@ -1,4 +1,4 @@
-# Translation Check 2.0.2
+# Translation Check 2.0.3
 
 Checks whether a web page **or a PDF open in the browser** is fully in the language you pick, and highlights what isn't.
 Load this folder in `chrome://extensions` (Developer mode → Load unpacked). Needs Chrome 114+.
@@ -20,10 +20,21 @@ is different: when two models agree on the same other language and none of its w
 ("Pläne", "Privé", "Görsel") doesn't count as a vote. The language label is taken from function-word evidence, not from the model with the loudest guess. The "source" for comparison is only the page's English / `x-default`
 alternate, never another translation. Details are in `src/guard.js`, `src/lexicon.js` and `test/hardneg.mjs`.
 
+## English that the models can't place
+Two or three cognate-heavy words ("Enthusiastic, decisive", "Aggressive, Defensive, Professional") are too short for any statistical model.
+`src/english.js` adds dictionary evidence: a word that is everyday English (SCOWL) and **not** a word of the target language is English-only
+("decisive" on a French page), while words both languages share ("impatient", "service", "menu") stay neutral. A phrase is flagged when its
+English-only words make up at least half of it and none of its words belongs only to the target. A single word needs 9+ letters and tinyld's
+agreement. Word lists exist for fr, de, es, it, pt and nl (`npm run wordlists` regenerates `src/wordlists.js`); other languages fall back to tinyld.
+
+## Dates
+Dates written with month names ("10. Nov. 2026", "Nov 10, 2026", "10 de noviembre de 2026") are formatted values and are ignored, like numeric
+dates. With *Format hints* on, a date whose month name is English and not also the page language's ("Dec 3" on a German page) gets a hint.
+
 ## Names
 People, places and brands read the same in every language, so they are neither translated nor untranslated. They get a verdict of their own
 (*name*): counted in the popup ("5 names"), never highlighted, never counted as unclear, and they don't change the score. A name is recognised
-from the built-in lists in `src/names.js` (given names, surnames, cities, brands), or because it is shaped like one (capitalised words that are
+from the built-in lists in `src/names.js` (given names, surnames, cities, brands; about 13,000 given names and 13,000 surnames from 70 locales are generated into `src/namelists.js`, with ordinary words such as "Will" or "Grace" left out, plus common Malay names), or because it is shaped like one (capitalised words that are
 not ordinary vocabulary) **and** the models cannot agree on any language for it, which is what names look like to a detector. Interface
 vocabulary such as "Order History" or "Wish List" is a *label*, not a name, and is still checked. German pages don't use the shape rule
 (German capitalises every noun). A single unknown capitalised word stays *unclear*.

@@ -74,6 +74,11 @@ api.runtime.onStartup?.addListener(syncAuto);
 api.runtime.onInstalled?.addListener(syncAuto);
 
 api.runtime.onMessage.addListener((msg, sender, send) => {
+  if (msg?.type === 'tc-inject') { // the popup can't inject the page script itself in some browsers (Vivaldi); the worker always can
+    api.scripting.executeScript({ target: { tabId: msg.tabId }, files: ['content.js'] })
+      .then(() => send({ ok: true }), (e) => send({ error: String(e && e.message ? e.message : e) }));
+    return true;
+  }
   if (msg?.type === 'tc-sync-auto') {
     syncAuto().then(() => send({ ok: true }));
     return true;

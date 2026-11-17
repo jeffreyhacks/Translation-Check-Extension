@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Translation Check",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Checks whether the current page is fully translated into a language you pick, and highlights text that isn't.",
   "minimum_chrome_version": "114",
   "permissions": [

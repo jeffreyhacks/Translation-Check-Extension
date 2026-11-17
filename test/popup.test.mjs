@@ -37,6 +37,14 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
     runtime: { onMessage: { addListener: (f) => (msgL = f) }, getURL: (p) => 'chrome-extension://abc/' + p, sendMessage: async (m) => { runtimeSent.push(m); return {}; } },
     sidePanel: { open: async () => {} },
   };
+  if (o.noScripting) { // Vivaldi: the popup has no chrome.scripting; injection goes through the background worker
+    delete w.chrome.scripting;
+    w.chrome.runtime.sendMessage = async (m) => { runtimeSent.push(m); return m.type === 'tc-inject' ? { ok: true } : {}; };
+  }
+  if (o.partialBrowser) { // browsers that also define a partial `browser` namespace (no scripting): the popup must still use chrome
+    w.chrome.runtime.id = 'abc';
+    w.browser = { runtime: { id: 'abc', sendMessage: async () => ({}) }, storage: w.chrome.storage, tabs: w.chrome.tabs };
+  }
   w.URL.createObjectURL = (b) => { downloads.push(b); return 'blob:x'; };
   w.URL.revokeObjectURL = () => {};
   w.HTMLAnchorElement.prototype.click = function () { downloads.push({ name: this.download }); };
@@ -56,6 +64,21 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
 const readBlob = (w, blob, as = 'text') => new Promise((res) => { const r = new w.FileReader(); r.onload = () => res(r.result); if (as === 'text') r.readAsText(blob); else r.readAsArrayBuffer(blob); });
 const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.textContent).join(' | ');
 
+{
+  const p = await boot('popup.html', 'https://shop.example.com/x', { noScripting: true });
+  p.$('#scan').click(); await sleep(50);
+  t('popup: without chrome.scripting (Vivaldi) the background worker injects the page script', p.runtimeSent.some((m) => m.type === 'tc-inject' && m.tabId === 5) && !p.$('#result').hidden, p.$('#status').textContent);
+}
+{
+  const p = await boot('popup.html', 'vivaldi:extensions');
+  p.$('#scan').click(); await sleep(50);
+  t('popup: browser pages (vivaldi:extensions) get a clear message, not a crash', /can’t be checked/.test(p.$('#status').textContent) && !p.sent.some((m) => m.type === 'scan'), p.$('#status').textContent);
+}
+{
+  const p = await boot('popup.html', 'https://shop.example.com/x', { partialBrowser: true });
+  p.$('#scan').click(); await sleep(50);
+  t('popup: works when the browser also has a partial "browser" object without scripting', !p.$('#result').hidden && !/executeScript/.test(p.$('#status').textContent), p.$('#status').textContent);
+}
 {
   const p = await boot();
   t('popup: language picker populated, defaulting to the page\'s own language', p.$('#lang').options.length >= 40 && p.$('#lang').value === 'auto' && p.$('#lang').options[0].value === 'auto');
