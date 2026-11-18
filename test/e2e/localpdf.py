@@ -4,7 +4,7 @@ import os, json, time, tempfile, shutil, pathlib
 from playwright.sync_api import sync_playwright
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 EXT = tempfile.mkdtemp(prefix='tc-ext-')
-for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js']: shutil.copy(ROOT / f, EXT)
+for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js', 'learn.js']: shutil.copy(ROOT / f, EXT)
 shutil.copytree(ROOT / 'icons', pathlib.Path(EXT) / 'icons'); shutil.copytree(ROOT / 'vendor', pathlib.Path(EXT) / 'vendor')
 PDF = (ROOT / 'test' / 'e2e' / 'site' / 'handbook.pdf').as_uri()
 res = []

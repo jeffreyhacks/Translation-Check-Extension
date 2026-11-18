@@ -3,6 +3,9 @@
 // masks, highlights and reports.
 import { mask, compileTerms } from './mask.js';
 import { detectBug, formatHints } from './rules.js';
+import { describe, contextLine, slotOf } from './context.js';
+import { matcher } from './learn.js';
+import { nonLatinTarget, latinOnly } from './scripts.js';
 
 (() => {
   if (window.__tcLoaded) return;
@@ -14,22 +17,29 @@ import { detectBug, formatHints } from './rules.js';
   const NO_TRANSLATE = '[translate="no"],.notranslate,[contenteditable=""],[contenteditable="true"]';
   const URLISH = /^(https?:\/\/|www\.)\S+$|^\S+@\S+\.\S+$/i;
   const MAX_ITEMS = 6000;
+  const ACCOUNT = /(admin|user|employee|manager|staff|test|demo|dev|support|team|bot|guest|owner|member|agent|trainer|trainee)/;
   // Every copy of this script marks the page under its own private names. A copy from before an extension update keeps running in tabs that
   // were not reloaded and its marks outlive it, so they must never share names with the current check (see purgeForeign).
-  const NS = 'tc-' + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+  // 2.0.6 marks under "tc2-" names and data-tc2-* attributes. Older copies sweep away every mark named "tc-…" that isn't theirs on each live
+  // update; under the old names a stale copy in a tab that wasn't reloaded erased this check's highlights as soon as the page changed.
+  const NS = 'tc2-' + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+  const A_STYLE = 'data-tc2-style', A_FLAG = 'data-tc2-flag', A_FOCUS = 'data-tc2-focus';
   const K = { bad: NS + '-bad', unsure: NS + '-unsure', bug: NS + '-bug', fmt: NS + '-fmt', focus: NS + '-focus' };
-  const MARK_KEY = /^tc-(?:[a-z0-9]{6}-)?(?:bad|unsure|bug|fmt|focus)$/; // names any version of this extension has used
+  const MARK_KEY = /^tc2?-(?:[a-z0-9]{6}-)?(?:bad|unsure|bug|fmt|spell|layout|focus)$/; // names any version of this extension has used (spell/layout: older 2.0.6 builds)
   const RANK = { fmt: 1, unsure: 2, bad: 3, bug: 4 };
+  // Hints that never change whether text counts as translated: listed in their own tab, not in the score or the toolbar badge.
+  const HINTS = new Set(['fmt']);
 
   const tick = () => new Promise((r) => setTimeout(r, 0));
   const clean = (s) => s.replace(/\s+/g, ' ').trim();
   const words = (s) => (s.match(/\p{L}+/gu) || []).length;
+  const otherVotes = (v) => (v && v.votes ? ['cld3', 'franc', 'tinyld'].filter((k) => v.votes[k] === 'other').length : 0);
   const nk = (s) => clean(s).toLowerCase();
   const send = (m) => { try { const p = api.runtime.sendMessage(m); return p && p.then ? p : Promise.resolve(p); } catch (e) { return Promise.reject(e); } };
   const quiet = (m) => send(m).catch(() => {});
 
-  let state = null, last = null, seq = 0, busy = false, again = false, timer = 0;
-  let visCache = new WeakMap(), blockCache = new WeakMap();
+  let state = null, last = null, seq = 0, busy = false, again = false, timer = 0, firstChange = 0, langDirty = false;
+  let visCache = new WeakMap(), blockCache = new WeakMap(), ctxCache = new WeakMap();
   const vcache = new Map(), targets = new Map(), styled = new Map(), marks = new Map();
   let observers = [], observed = new WeakSet();
   const dirty = new Set();
@@ -101,12 +111,21 @@ import { detectBug, formatHints } from './rules.js';
     const keep = [];
     let ign = 0;
     for (const it of raw) {
+      // learned from earlier Ignore clicks (codes, versions, a page slot such as `span.user-name`): skipped like ignored terms
+      if (state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host)) { state.learnedN++; continue; }
       if (p.bugs) {
         const b = detectBug(it.text);
         if (b) { it.base = { v: 'bug', reason: b }; it.j = ''; it.len = it.text.length; keep.push(it); continue; }
       }
       if (p.hints) { const f = formatHints(it.text, p.lang); if (f.length) it.fmt = f; }
-      const m = mask(it.text, p.lang, termRe);
+      let m = mask(it.text, p.lang, termRe);
+      // On a page in another script, a one-word BrandCase title ("HomeIoT", "TrueCost") is judged as it is instead of being skipped as a brand:
+      // built-in brands (WhatsApp, YouTube…) are still recognised as names, anything else is listed for a decision.
+      if (p.lang !== 'en' && latinOnly(it.text) && !(termRe && termRe.test(it.text))) {
+        if (!/\p{L}{2}/u.test(m.text) && /^[A-Z]?[a-z]+(?:[A-Z][a-z0-9]*)+$/.test(it.text)) { m = { text: it.text, nameLike: true }; it.title = true; }
+        // a short title that masking cut down to one word ("Home IOT" -> "Home") is judged whole: the single word left says nothing
+        else if (!nonLatinTarget(p.lang) && m.removed && words(it.text) >= 2 && words(it.text) <= 4 && words(m.text) === 1 && !/\d/.test(it.text)) { it.jPart = m.text; m = { text: it.text, nameLike: true }; it.title = true; }
+      }
       if (!/\p{L}{2}/u.test(m.text)) {
         if (/\p{L}/u.test(it.text)) ign++;
         if (it.fmt) { it.base = { v: 'ok' }; it.j = ''; it.len = 0; keep.push(it); }
@@ -236,13 +255,57 @@ import { detectBug, formatHints } from './rules.js';
   async function judge(items) {
     const todo = items.filter((it) => !it.base);
     await ensureCtx(items);
-    await classifyTexts(todo.map((it) => it.j));
+    await classifyTexts([...todo.map((it) => it.j), ...todo.filter((it) => it.jPart).map((it) => it.jPart)]);
+    // On a page written in another script (Hindi, Arabic, Russian…), Latin-letter text can never be in the page's language, whatever surrounds it.
+    const otherScript = nonLatinTarget(state.p.lang);
     for (const it of todo) { // pass 1
       let v = vcache.get(ck(it.j));
+      it.wrongScript = otherScript && latinOnly(it.j);
       // Short capitalised phrases are often product/person names: weak evidence isn't enough to flag them
       // (unless every word is plain interface vocabulary, like "Order History": that is a label, not a name).
-      if (it.nameLike && v.v === 'bad' && !v.label && v.reason !== 'Looks like English text') v = { v: 'unsure' };
+      if (it.nameLike && v.v === 'bad' && !v.label && v.reason !== 'Looks like English text') {
+        // a possible name or title: not a warning on this evidence, but listed with its votes (never silently counted as translated)
+        v = { v: 'unsure', reason: it.wrongScript ? 'Name or title? Latin letters on a page in another script' : 'Name or title? Two language models read it as English', votes: v.votes, detected: v.detected };
+      }
+      // a lowercase account ID ("jeffemployee", "vasu.k", "user_42"): data rather than text to translate. It needs an ID's tell (digits or
+      // separators, an account word, or a length no ordinary word has), so a foreign word such as "ahora" or "cancelar" is still listed.
+      if ((it.wrongScript || (state.p.lang !== 'en' && latinOnly(it.j))) && v.v === 'unsure' && !v.enVocab && /^[a-z][a-z0-9._-]{4,}$/.test(it.j) && (/[0-9._-]/.test(it.j) || ACCOUNT.test(it.j) || it.j.length >= 13)) {
+        v = { v: 'name', reason: 'Looks like a user name or ID', kind: 'id' };
+      }
+      if (it.wrongScript && v.v === 'unsure' && !v.reason) v = { ...v, reason: 'Name or title? Latin letters on a page in another script' };
+      // a title kept whole ("HomeIoT", "Åbn Playground") is not hidden as a name for its shape alone; names from the built-in lists (kind) still are
+      if (it.title && v.v === 'name' && !v.kind) v = { v: 'unsure', votes: v.votes };
+      // judged whole, it can never come out better than before: if the whole title reads as translated, the verdict on what masking left stands
+      if (it.jPart && v.v === 'ok') { v = vcache.get(ck(it.jPart)); it.title = false; }
+      // Held: what two models read as English on a non-English page (English is where untranslated text comes from), and Latin letters on a page
+      // in another script. Its own evidence decides: never cleared by its section, its sentence or the page average, so every copy of the same
+      // text gets the same verdict. Words genuinely shared with the target language ("Status" on a German page) are not held.
+      // (a short-word guard keeps the models' reading under "was"; shared vocabulary is protected only while the models are split, not when all three agree)
+      const leanEn = (v.detected || v.other || v.was?.detected) === 'en' || v.enVocab;
+      const ov = otherVotes(v);
+      // (titles are written in title case, "Skill Scout"; a native phrase in sentence case, "Persona standard", is not held)
+      const latinPage = state.p.lang !== 'en' && latinOnly(it.j), n = words(it.j);
+      it.hold = it.wrongScript || (latinPage && v.v === 'unsure' && (it.title || (it.nameLike && n >= 2 && ov >= 2 && leanEn && (!v.shared || ov === 3))));
+      // a single unknown capitalised word ("Wisight", "Truecost") reads like "Thema" to the models; it is held only if it sits in the same page slot
+      // as held titles (see below), i.e. it is one more title in a column or a set of cards of titles
+      it.titleWord = latinPage && !it.hold && v.v === 'unsure' && n === 1 && /^\p{Lu}/u.test(it.j) && !v.enVocab && !v.shared && ov >= 1 && leanEn;
+      if (it.hold && v.v === 'unsure' && (!v.reason || it.title)) v = { ...v, reason: ov >= 2 && leanEn ? 'Name or title? Two language models read it as English' : 'Name or title? Could be untranslated' };
       it.base = v;
+    }
+    // pass 1b: titles in the same slot (same element and class: a table column of project names, a set of cards) are judged together
+    if (todo.some((it) => it.titleWord)) {
+      const elOf = (it) => (it.kind === 'text' ? it.node.parentElement || it.node.parentNode?.host : it.el);
+      const titleSlots = new Set();
+      for (const it of todo) {
+        const titleish = it.hold || (it.base.v === 'bad' && it.nameLike && words(it.j) >= 2);
+        if (!titleish || it.wrongScript) continue;
+        const sl = slotOf(elOf(it)); if (sl) titleSlots.add(sl);
+      }
+      for (const it of todo) {
+        if (!it.titleWord) continue;
+        const sl = slotOf(elOf(it));
+        if (sl && titleSlots.has(sl)) { it.hold = true; it.base = { ...it.base, reason: 'Name or title? Two language models read it as English, like the other titles here' }; }
+      }
     }
     // pass 2: fragments we couldn't judge inherit the verdict of the sentence they sit in
     const ctxFor = new Map();
@@ -253,12 +316,13 @@ import { detectBug, formatHints } from './rules.js';
       if (c && c.length > it.j.length + 3) ctxFor.set(it, c);
     }
     await classifyTexts([...ctxFor.values()]);
-    for (const [it, c] of ctxFor) { const vc = vcache.get(ck(c)); if (vc.v !== 'unsure') it.base = { ...vc, via: 'context' }; }
+    // (a sentence may flag Latin letters on a page in another script, but never clear them)
+    for (const [it, c] of ctxFor) { const vc = vcache.get(ck(c)); if (vc.v !== 'unsure' && !(it.hold && vc.v !== 'bad')) it.base = { ...vc, via: 'context' }; }
     // pass 2b: a lone word or label still unclear ("Empathie" alone in a card) is read with its section. If the section around it is clearly in
     // the page's language, the label is too, unless it is plain English on a non-English page or two models read it as another language.
     const secFor = new Map();
     for (const it of todo) {
-      if (it.base.v !== 'unsure' || it.base.enVocab || it.base.via) continue;
+      if (it.base.v !== 'unsure' || it.base.enVocab || it.base.via || it.hold) continue;
       const v = it.base.votes, other = v ? ['cld3', 'franc', 'tinyld'].filter((k) => v[k] === 'other').length : 0;
       if (other >= 2) continue;
       const raw = it.kind === 'attr' ? sectionFor(it.el, null) : sectionFor(it.node.parentElement, it.node);
@@ -295,7 +359,17 @@ import { detectBug, formatHints } from './rules.js';
       for (const it of state.items) if (it.base.v === 'bad' && it.base.votes && !it.base.confirmed) it.base = { v: 'unsure', reason: 'Not confirmed by a second model', votes: it.base.votes };
     }
     for (const it of state.items) {
-      if (it.base.v === 'unsure' && assume) { it.v = { v: 'ok', assumed: true }; state.assumedN++; } else it.v = it.base;
+      // (Latin letters on a page in another script are never assumed translated)
+      if (it.base.v === 'unsure' && assume && !it.hold) { it.v = { v: 'ok', assumed: true }; state.assumedN++; } else it.v = it.base;
+    }
+    // Text the person marked as untranslated (from the Unclear list) is listed as untranslated on every check, whatever the models say.
+    const marked = new Set(state.p.marked.map(nk));
+    if (marked.size) {
+      for (const it of state.items) {
+        if (it.v.v === 'bad' || it.v.v === 'bug' || !marked.has(nk(it.text))) continue;
+        if (it.v.assumed) state.assumedN--;
+        it.v = { ...it.v, v: 'bad', assumed: false, marked: true, reason: 'Marked untranslated by you' };
+      }
     }
   }
 
@@ -307,18 +381,18 @@ import { detectBug, formatHints } from './rules.js';
     if (styled.has(rootNode)) return;
     const doc = rootNode.nodeType === 9 ? rootNode : rootNode.ownerDocument;
     const s = doc.createElement('style');
-    s.setAttribute('data-tc-style', NS);
+    s.setAttribute(A_STYLE, NS);
     s.textContent = `
-      ::highlight(${K.bad}){background-color:rgba(255,214,0,.7);color:#111;text-decoration:underline wavy #d7263d}
+      ::highlight(${K.bad}){background-color:#ffd600;color:#111;text-decoration:underline wavy #d7263d}
       ::highlight(${K.unsure}){background-color:rgba(80,140,255,.28);text-decoration:underline dotted #3b6df0}
       ::highlight(${K.bug}){background-color:rgba(190,60,255,.45);color:#111;text-decoration:underline wavy #7a1fa2}
       ::highlight(${K.fmt}){text-decoration:underline dotted #0f9d8a}
       ::highlight(${K.focus}){background-color:#d7263d;color:#fff}
-      [data-tc-flag="${NS}:bad"]{outline:2px dashed #d7263d!important;outline-offset:2px!important}
-      [data-tc-flag="${NS}:unsure"]{outline:2px dotted #3b6df0!important;outline-offset:2px!important}
-      [data-tc-flag="${NS}:bug"]{outline:2px dashed #7a1fa2!important;outline-offset:2px!important}
-      [data-tc-flag="${NS}:fmt"]{outline:2px dotted #0f9d8a!important;outline-offset:2px!important}
-      [data-tc-focus="${NS}"]{box-shadow:0 0 0 4px rgba(215,38,61,.5)!important}`;
+      [${A_FLAG}="${NS}:bad"]{outline:2px dashed #d7263d!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:unsure"]{outline:2px dotted #3b6df0!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:bug"]{outline:2px dashed #7a1fa2!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:fmt"]{outline:2px dotted #0f9d8a!important;outline-offset:2px!important}
+      [${A_FOCUS}="${NS}"]{box-shadow:0 0 0 4px rgba(215,38,61,.5)!important}`;
     (rootNode.nodeType === 9 ? rootNode.head || rootNode.documentElement : rootNode).appendChild(s);
     styled.set(rootNode, s);
   }
@@ -336,7 +410,7 @@ import { detectBug, formatHints } from './rules.js';
   function resetMarks() {
     for (const win of marks.keys()) { try { Object.values(K).forEach((k) => win.CSS.highlights.delete(k)); } catch (e) { /* frame gone */ } }
     marks.clear();
-    for (const root of state ? state.scope.roots : []) root.querySelectorAll?.(`[data-tc-flag^="${NS}:"]`).forEach((el) => el.removeAttribute('data-tc-flag'));
+    for (const root of state ? state.scope.roots : []) root.querySelectorAll?.(`[${A_FLAG}^="${NS}:"]`).forEach((el) => el.removeAttribute(A_FLAG));
   }
 
   // Removes whatever an older copy of this script left on the page: its highlights, its style sheet and its outlines. That copy keeps running in
@@ -353,10 +427,12 @@ import { detectBug, formatHints } from './rules.js';
       try { const reg = w.CSS.highlights; for (const k of [...reg.keys()]) if (MARK_KEY.test(k) && !k.startsWith(NS + '-')) reg.delete(k); } catch (e) { /* frame gone */ }
     }
     for (const d of docs) {
-      d.querySelectorAll?.('style#tc-style,style[data-tc-style],[data-tc-flag],[data-tc-focus]').forEach((el) => {
-        if (el.localName === 'style') { if (el.getAttribute('data-tc-style') !== NS) el.remove(); return; }
-        if (!(el.getAttribute('data-tc-flag') || '').startsWith(NS + ':')) el.removeAttribute('data-tc-flag');
-        if (el.getAttribute('data-tc-focus') !== NS) el.removeAttribute('data-tc-focus');
+      // older versions' names (always someone else's) and this version's names when another copy left them
+      d.querySelectorAll?.(`style#tc-style,style[data-tc-style],[data-tc-flag],[data-tc-focus],style[${A_STYLE}],[${A_FLAG}],[${A_FOCUS}]`).forEach((el) => {
+        if (el.localName === 'style') { if (el.getAttribute(A_STYLE) !== NS) el.remove(); return; }
+        el.removeAttribute('data-tc-flag'); el.removeAttribute('data-tc-focus');
+        if (el.hasAttribute(A_FLAG) && !el.getAttribute(A_FLAG).startsWith(NS + ':')) el.removeAttribute(A_FLAG);
+        if (el.hasAttribute(A_FOCUS) && el.getAttribute(A_FOCUS) !== NS) el.removeAttribute(A_FOCUS);
       });
     }
   }
@@ -366,10 +442,10 @@ import { detectBug, formatHints } from './rules.js';
     resetMarks();
     purgeForeign();
     targets.clear();
-    const stats = { ok: 0, bad: 0, unsure: 0, bug: 0, fmt: 0, name: 0, okN: 0, badN: 0, unsureN: 0, bugN: 0, fmtN: 0, nameN: 0, assumedN: state.assumedN, ignoredN: state.ignoredN };
+    const stats = { ok: 0, bad: 0, unsure: 0, bug: 0, fmt: 0, name: 0, okN: 0, badN: 0, unsureN: 0, bugN: 0, fmtN: 0, nameN: 0, assumedN: state.assumedN, ignoredN: state.ignoredN, learnedN: state.learnedN };
     const issues = [];
     let id = 0;
-    const add = (it, verdict, reason, detected) => {
+    const add = (it, verdict, reason, detected, extra) => {
       const myId = ++id;
       targets.set(myId, it);
       const n = nodeOf(it);
@@ -380,10 +456,11 @@ import { detectBug, formatHints } from './rules.js';
         const m = marksFor(winOf(n));
         if (verdict === 'unsure') { if (p.unsure) m.unsure.add(r); } else m[verdict].add(r);
       } else if (verdict !== 'unsure' || p.unsure) {
-        const cur = (n.getAttribute('data-tc-flag') || '').replace(NS + ':', '');
-        if (!RANK[cur] || RANK[verdict] > RANK[cur]) n.setAttribute('data-tc-flag', NS + ':' + verdict);
+        const cur = (n.getAttribute(A_FLAG) || '').replace(NS + ':', '');
+        if (!RANK[cur] || RANK[verdict] > RANK[cur]) n.setAttribute(A_FLAG, NS + ':' + verdict);
       }
-      issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: it.v?.votes, confirmed: !!it.v?.confirmed, reason: reason && it.v?.via === 'context' && verdict !== 'fmt' ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length });
+      const hint = HINTS.has(verdict);
+      issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: hint ? undefined : it.v?.votes, confirmed: !hint && !!it.v?.confirmed, marked: !hint && !!it.v?.marked, reason: reason && it.v?.via === 'context' && !hint ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length, ...extra });
     };
     for (const it of state.items) {
       if (!nodeOf(it).isConnected) continue;
@@ -394,21 +471,58 @@ import { detectBug, formatHints } from './rules.js';
     }
     for (const win of marks.keys()) {
       const m = marks.get(win), reg = win.CSS.highlights;
-      if (m.bad.size) reg.set(K.bad, m.bad);
-      if (m.unsure.size) reg.set(K.unsure, m.unsure);
-      if (m.bug.size) reg.set(K.bug, m.bug);
-      if (m.fmt.size) reg.set(K.fmt, m.fmt);
+      for (const k of ['bad', 'unsure', 'bug', 'fmt']) if (m[k].size) reg.set(K[k], m[k]);
     }
     const order = { bug: 0, bad: 1, unsure: 2, fmt: 3 };
-    issues.sort((a, b) => order[a.verdict] - order[b.verdict] || b.len - a.len);
-    state.allIssues = issues.slice(0, 5000);
+    const groups = group(issues);
+    groups.sort((a, b) => order[a.verdict] - order[b.verdict] || b.len - a.len);
+    state.allIssues = groups.slice(0, 5000);
+    for (const g of groups.slice(0, 300)) withContext(g, 12);
     const judged = stats.ok + stats.bad;
     last = {
-      lang: p.lang, requested: p.requested, mode: p.mode, host: location.hostname, pageLang: document.documentElement.lang || '', stats,
+      lang: p.lang, requested: p.requested, mode: p.mode, host: location.hostname, pageLang: document.documentElement.lang || '', stats, auto: state.auto,
       score: judged ? Math.round((stats.ok / judged) * 100) : null,
-      issues: issues.slice(0, 300).map((i) => ({ ...i, text: i.text.slice(0, 160) })), truncated: Math.max(0, issues.length - 300),
+      issues: groups.slice(0, 300).map((i) => ({ ...i, text: i.text.slice(0, 160) })), truncated: Math.max(0, groups.length - 300),
       source: state.sourceInfo, models: state.models, live: !!observers.length,
     };
+  }
+
+  // ---------- Grouping: one item per identical string, mapped to every place it appears ----------
+  // Same verdict and same text (case and spacing ignored); hints also need the same reason. The score is counted per occurrence (above),
+  // so grouping only changes how the list is shown.
+  function group(issues) {
+    const by = new Map();
+    for (const i of issues) {
+      const k = `${i.verdict}|${HINTS.has(i.verdict) ? i.reason : ''}|${clean(i.text)}`;
+      const g = by.get(k);
+      if (!g) { by.set(k, { ...i, count: 1, occ: [{ id: i.id, kind: i.kind, attr: i.attr }] }); continue; }
+      g.count++; g.len += i.len;
+      g.occ.push({ id: i.id, kind: i.kind, attr: i.attr });
+      if (g.confirmed === false && i.confirmed) { g.confirmed = true; g.votes = i.votes; } // the strongest evidence among the copies
+    }
+    return [...by.values()];
+  }
+
+  // Context: where each copy sits (element kind, page region, heading, text around it), for the first `limit` copies.
+  function contextOf(id) {
+    const t = targets.get(id);
+    if (!t) return null;
+    const n = nodeOf(t);
+    const el = t.kind === 'text' ? n.parentElement || n.parentNode?.host : n;
+    if (!el) return null;
+    const ck = t.kind === 'attr' ? el : n;
+    let c = ctxCache.get(ck);
+    if (!c) { c = describe(t.kind === 'text' ? n : null, el, t.kind === 'attr' ? t.attr : undefined); ctxCache.set(ck, c); }
+    return c;
+  }
+  function withContext(g, limit) {
+    g.occ.forEach((o, k) => {
+      if (k >= limit || o.where !== undefined) return;
+      const c = contextOf(o.id);
+      o.where = contextLine(c); o.before = c?.before || ''; o.after = c?.after || '';
+      if (k === 0) { g.context = c ? { kind: c.kind, region: c.region, heading: c.heading, label: c.label, before: c.before, after: c.after, path: c.path } : null; g.slot = c?.slot || ''; }
+    });
+    return g;
   }
 
   function announce(live) {
@@ -417,34 +531,48 @@ import { detectBug, formatHints } from './rules.js';
   }
 
   function clearAll() {
-    clearTimeout(timer); dirty.clear();
+    clearTimeout(timer); firstChange = 0; dirty.clear(); unfocus();
     observers.forEach((o) => o.disconnect()); observers = []; observed = new WeakSet();
     resetMarks();
     purgeForeign();
     for (const s of styled.values()) s.remove();
     styled.clear(); targets.clear();
-    state = null; last = null;
+    state = null; last = null; ctxCache = new WeakMap();
   }
 
+  // One "you are here" mark at a time. Each jump clears the previous one first, so a quick second click is never undone by the first click's
+  // timer (that used to delete the new mark early, so stepping through copies showed nothing). The mark stays for a few seconds.
+  let focused = null;
+  function unfocus() {
+    if (!focused) return;
+    clearTimeout(focused.timer);
+    try { focused.win.CSS.highlights.delete(K.focus); } catch (e) { /* frame gone */ }
+    focused.el?.removeAttribute(A_FOCUS);
+    focused = null;
+  }
   function focusIssue(id) {
     const t = targets.get(id);
     if (!t) return false;
     const n = nodeOf(t);
+    if (!n.isConnected) return false;
+    unfocus();
     const el = t.kind === 'text' ? n.parentElement || n.parentNode?.host : n;
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const win = winOf(n);
+    focused = { win, el: null, timer: 0 };
     if (t.kind === 'text') {
-      const win = winOf(n);
       const r = n.ownerDocument.createRange();
       r.selectNodeContents(n);
       const h = new win.Highlight(r);
       h.priority = 10;
       ensureStyle(n.getRootNode());
       win.CSS.highlights.set(K.focus, h);
-      setTimeout(() => win.CSS.highlights.delete(K.focus), 2200);
     } else if (el) {
-      el.setAttribute('data-tc-focus', NS);
-      setTimeout(() => el.removeAttribute('data-tc-focus'), 2200);
+      ensureStyle(el.getRootNode());
+      el.setAttribute(A_FOCUS, NS);
+      focused.el = el;
     }
+    focused.timer = setTimeout(unfocus, 6000);
     return true;
   }
 
@@ -467,38 +595,89 @@ import { detectBug, formatHints } from './rules.js';
     if (!state) return { issues: [] };
     return {
       url: location.href, title: document.title, lang: state.p.lang, generated: new Date().toISOString(), source: state.sourceInfo,
-      issues: state.allIssues.map((i) => {
-        const t = targets.get(i.id), n = t && nodeOf(t);
-        return { ...i, selector: n ? selectorOf(t.kind === 'text' ? n.parentElement || n.parentNode?.host : n) : '' };
+      issues: state.allIssues.map((g) => {
+        withContext(g, Infinity);
+        const sel = (id) => { const t = targets.get(id), n = t && nodeOf(t); return n ? selectorOf(t.kind === 'text' ? n.parentElement || n.parentNode?.host : n) : ''; };
+        const occurrences = g.occ.map((o) => ({ selector: sel(o.id), where: o.where, before: o.before, after: o.after, kind: o.kind, attr: o.attr }));
+        return { ...g, selector: occurrences[0]?.selector || '', occurrences };
       }),
     };
   }
 
+  // ---------- "Page's own language": declared, unless the page's text is clearly in another language (see pageLanguage in the worker) ----------
+  async function pageLanguage(texts, declared) {
+    const long = [...new Set(texts)].filter((t) => t.length >= 30).sort((a, b) => b.length - a.length).slice(0, 80);
+    let r = null;
+    try { r = await send({ type: 'tc-pagelang', texts: long, declared }); } catch (e) { /* older worker */ }
+    return r && 'lang' in r ? r : { lang: declared, declared, detected: '', share: 0 };
+  }
+  // In live mode, a change of <html lang> also counts as a page change (some apps do update it when the interface language switches).
+  function watchLang() {
+    const mo = new MutationObserver(() => { if (orphaned()) return retire(); dirty.add(null); langDirty = true; schedule(); });
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+    observers.push(mo);
+  }
+
   // ---------- Live updates: re-judge only what changed ----------
+  // A check runs once the page has been quiet for QUIET ms, and never later than MAX_WAIT ms after the first change: pages with a ticking
+  // clock or live counters ("Zuletzt aktualisiert …", "vor 3 Sekunden") change all the time, and a plain "wait until quiet" never ran there.
+  const QUIET = 250, MAX_WAIT = 800;
+  function schedule() {
+    const now = Date.now();
+    if (!firstChange) firstChange = now;
+    clearTimeout(timer);
+    timer = setTimeout(() => { timer = 0; firstChange = 0; refresh(); }, Math.max(0, Math.min(QUIET, firstChange + MAX_WAIT - now)));
+  }
   function observe(root) {
     if (observed.has(root)) return;
     observed.add(root);
     const mo = new MutationObserver((records) => {
+      if (orphaned()) return retire();
       for (const r of records) {
         if (r.type === 'characterData') { const e = r.target.parentElement || r.target.parentNode?.host; if (e) dirty.add(e); }
         else {
-          for (const n of r.addedNodes) { if (n.nodeType === 1 && !n.hasAttribute('data-tc-style')) dirty.add(n); else if (n.nodeType === 3) dirty.add(r.target); }
+          for (const n of r.addedNodes) { if (n.nodeType === 1 && !n.hasAttribute(A_STYLE)) dirty.add(n); else if (n.nodeType === 3) dirty.add(r.target); }
           if (r.removedNodes.length) dirty.add(null); // forces a re-render so highlights on removed text disappear
         }
       }
-      clearTimeout(timer);
-      timer = setTimeout(refresh, 700);
+      schedule();
     });
     mo.observe(root, { childList: true, subtree: true, characterData: true });
     observers.push(mo);
   }
 
+  // After the extension is reloaded or updated, this copy keeps running in the tab but can no longer reach the extension. It then stops for
+  // good: no more live re-checks and no more sweeping, so it can never touch the marks of the copy that replaced it.
+  const BORN_AS = (() => { try { return api.runtime?.id; } catch (e) { return undefined; } })();
+  const orphaned = () => { if (!BORN_AS) return false; try { return !api.runtime?.id; } catch (e) { return true; } }; // had an extension, lost it
+  function retire() {
+    clearTimeout(timer); firstChange = 0; dirty.clear();
+    observers.forEach((o) => o.disconnect()); observers = [];
+    state = null;
+  }
   async function refresh() {
     if (!state) return;
+    if (orphaned()) return retire();
     if (busy) { again = true; return; }
     busy = true;
     const my = seq;
     try {
+      // "Page's own language" follows the page: when the interface language was switched (text or <html lang> changed), check again in the new one
+      const changedText = [...dirty].reduce((n, e) => n + (e && e.isConnected ? Math.min((e.textContent || '').length, 2000) : 0), 0);
+      const recheckLang = langDirty || changedText >= 120;
+      langDirty = false;
+      if (state.params?.lang === 'auto' && recheckLang) {
+        const texts = [...state.items.filter((it) => nodeOf(it).isConnected).map((it) => it.text), ...[...dirty].filter((e) => e && e.isConnected).map((e) => e.textContent || '')];
+        const declaredNow = (document.documentElement.lang || '').toLowerCase().split(/[-_]/)[0];
+        const pl = await pageLanguage(texts.flatMap((t) => t.split(/\n+/)), declaredNow);
+        if (my !== seq || !state) return;
+        if (pl.lang && pl.lang !== state.p.lang) {
+          dirty.clear();
+          const res = await scan(state.params);
+          if (!res.error) announce(true);
+          return;
+        }
+      }
       const roots = [...dirty].filter((e) => e && e.isConnected);
       dirty.clear();
       visCache = new WeakMap();
@@ -514,7 +693,7 @@ import { detectBug, formatHints } from './rules.js';
       announce(true);
     } catch (e) { /* keep the previous result */ } finally {
       busy = false;
-      if (again) { again = false; timer = setTimeout(refresh, 300); }
+      if (again) { again = false; schedule(); }
     }
   }
 
@@ -523,11 +702,8 @@ import { detectBug, formatHints } from './rules.js';
     if (!(window.CSS && CSS.highlights && window.Highlight)) return { error: 'This browser is too old for the highlight API (needs Chrome 105+).' };
     if (!document.body) return { error: 'This page has no body to scan.' };
     let lang = params.lang;
-    if (lang === 'auto') { // check the page against the language it declares about itself
-      const raw = (document.documentElement.lang || '').toLowerCase().split(/[-_]/)[0];
-      lang = { iw: 'he', in: 'id', nb: 'no', nn: 'no' }[raw] || raw;
-      if (!lang) return { error: 'This page doesn’t declare its language (no lang attribute). Pick a language instead of “Page’s own language”.' };
-    }
+    const declared = (() => { const raw = (document.documentElement.lang || '').toLowerCase().split(/[-_]/)[0]; return { iw: 'he', in: 'id', nb: 'no', nn: 'no' }[raw] || raw; })();
+    if (lang === 'auto') lang = declared; // refined below from the page's own text (the declared language can be stale)
     const my = ++seq;
     clearAll();
     visCache = new WeakMap(); blockCache = new WeakMap();
@@ -536,13 +712,21 @@ import { detectBug, formatHints } from './rules.js';
       related: params.related !== false, ignore: params.ignore || [], hints: !!params.hints,
       bugs: params.bugs !== false, source: params.source !== false, live: params.live !== false,
       verify: params.verify !== false, confirmedOnly: !!params.confirmedOnly,
+      learned: Array.isArray(params.learned) ? params.learned : [],
+      marked: Array.isArray(params.marked) ? params.marked.filter((x) => typeof x === 'string') : [],
     };
-    state = { p, items: [], scope: { roots: new Set() }, ctx: null, ignoredN: 0, assumedN: 0, allIssues: [], source: null, sourceInfo: { status: p.source ? 'none' : 'off' },
-      termRe: compileTerms([...p.ignore, ...siteTerms()]) };
+    const learnedTerms = p.learned.filter((r) => r.type === 'term').map((r) => r.value);
+    state = { p, params, items: [], scope: { roots: new Set() }, ctx: null, ignoredN: 0, assumedN: 0, learnedN: 0, allIssues: [], source: null, sourceInfo: { status: p.source ? 'none' : 'off' },
+      termRe: compileTerms([...p.ignore, ...learnedTerms, ...siteTerms()]), learnMatch: matcher(p.learned), auto: null };
     try {
-      const srcP = p.source ? loadSource(p) : null; // runs while we collect
       const raw = [];
       await collectFrom(document.body, p, raw, state.scope);
+      if (params.lang === 'auto') {
+        state.auto = await pageLanguage(raw.map((it) => it.text), declared);
+        p.lang = state.auto.lang;
+        if (!p.lang) return { error: 'This page doesn’t declare its language (no lang attribute) and its text is too short to tell. Pick a language instead of “Page’s own language”.' };
+      }
+      const srcP = p.source ? loadSource(p) : null;
       const { keep, ign } = prepare(raw, p, state.termRe);
       state.items = keep; state.ignoredN = ign;
       await ensureCtx(keep);
@@ -555,7 +739,7 @@ import { detectBug, formatHints } from './rules.js';
       await judge(keep);
       if (my !== seq || !state) return { error: 'A newer check replaced this one.' };
       finalize(); render();
-      if (p.live) for (const r of state.scope.roots) observe(r);
+      if (p.live) { for (const r of state.scope.roots) observe(r); if (params.lang === 'auto') watchLang(); }
       last.live = !!observers.length;
       announce(false);
       return last;
@@ -579,11 +763,14 @@ import { detectBug, formatHints } from './rules.js';
   // Sites the user opted in to are checked automatically after load.
   (async () => {
     try {
-      const d = await api.storage.local.get(['opts', 'autoSites', 'ignore']);
+      const d = await api.storage.local.get(['opts', 'autoSites', 'ignore', 'learn', 'marked']);
       if (!d || !d.opts || !(d.autoSites || []).includes(location.hostname)) return;
       await new Promise((r) => setTimeout(r, 1200));
       const ig = d.ignore || {};
-      await scan({ ...d.opts, live: true, ignore: [...(ig.global || []), ...((ig.sites || {})[location.hostname] || [])] });
+      const learned = d.learn && d.learn.on !== false && Array.isArray(d.learn.rules) ? d.learn.rules.filter((r) => r && (r.scope === '*' || r.scope === location.hostname)) : [];
+      const mk = d.marked || {};
+      await scan({ ...d.opts, live: true, ignore: [...(ig.global || []), ...((ig.sites || {})[location.hostname] || [])], learned,
+        marked: [...(mk.global || []), ...((mk.sites || {})[location.hostname] || [])] });
     } catch (e) { /* storage unavailable */ }
   })();
 })();

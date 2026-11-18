@@ -9,8 +9,8 @@ import { loadModule } from 'cld3-asm/dist/cjs/index.js'; // CommonJS entry: the 
 import { francAll } from 'franc-min'; // open-ended vote: the 82 big languages, which keeps short English from being read as Norwegian
 import { francAll as francFull } from 'franc'; // head-to-head only: franc-min has no Danish, Norwegian, Finnish, Slovak..., so it can't be asked about them
 import { detectAll, supportedLanguages, toISO2 } from 'tinyld/heavy';
-import { norm, groupOf, relatedOf, relabel, englishHits, plausible } from './engine.js';
-import { englishLike } from './english.js';
+import { norm, groupOf, relatedOf, relabel, englishHits, plausible, TARGET_SCRIPTS } from './engine.js';
+import { englishLike, allEnglish, sharedEntirely } from './english.js';
 import { implausible } from './alphabet.js';
 import { HARD } from './guard.js';
 
@@ -219,8 +219,18 @@ export function createVerifier(cldFallback = async () => null) {
     const notEnglish = dictMiss && !!agree && agree.n > forTarget.length && !forTarget.some((x) => x.strong) && letters(text) >= 3 && (hasAccent(text) || sources.some((l) => kin(l, agree.lang)));
     if (v.v === 'bad') {
       if (forTarget.length >= 2) return { v: 'unsure', reason: 'The language models disagree', votes, via: 'verify' }; // rules or a confident model still say otherwise
-      const guess = agree ? agree.lang : majority(against.map((x) => x.lang), v.detected);
-      return { ...v, detected: relabel(words, guess), votes, confirmed: !!agree, ...(agree ? { agree } : {}), ...(notEnglish ? { notEnglish } : {}) }; // function-word evidence settles the label
+      // Hard evidence (clear English wording, a wrong script) settles the label; the models only have to agree that it isn't the target.
+      // So a hard warning counts as confirmed when no model reads the target and two read another language, even if they name different ones
+      // (two short English words: tinyld "English", CLD3 "French", franc "Spanish"), or when it is English wording in the wrong script.
+      const nonLatinPage = !(TARGET_SCRIPTS[lang] || ['latin']).includes('latin');
+      const latinOnly = (text.match(/\p{L}/gu) || []).every((c) => /\p{Script=Latin}/u.test(c));
+      const wrongScript = hard && v.detected === 'en' && nonLatinPage && latinOnly;
+      const hardBacked = hard && !forTarget.length && (against.length >= 2 || wrongScript);
+      // English wording keeps its English label ("Review Pending" is not Indonesian because two models guessed so), unless every word is
+      // also a word of the language the models agree on, by that language's word list ("Service client" stays French).
+      const englishWording = hard && v.detected === 'en' && v.reason === 'Looks like English text' && allEnglish(text) && !(agree && sharedEntirely(text, agree.lang));
+      const guess = englishWording ? 'en' : agree ? agree.lang : hard && v.detected === 'en' ? 'en' : majority(against.map((x) => x.lang), v.detected);
+      return { ...v, detected: relabel(words, guess), votes, confirmed: !!agree || hardBacked, ...(agree ? { agree } : {}), ...(notEnglish ? { notEnglish } : {}) }; // function-word evidence settles the label
     }
     // "can't tell": two models that independently agree on the same other language make it a warning
     if (agree && (letters(text) >= 10 || notEnglish) && !blocked('other')) {

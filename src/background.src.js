@@ -1,10 +1,11 @@
 // Service worker: hosts the language model once for the whole browser (instead of once per tab),
 // and sets the toolbar badge.
-import { createEngine } from './engine.js';
+import { createEngine, norm, groupOf } from './engine.js';
 import { createVerifier } from './verify.js';
 import { guardShort } from './guard.js';
 import { knownName, nameShape, isLabel } from './names.js';
-import { allEnglish } from './english.js';
+import { allEnglish, sharedEntirely } from './english.js';
+import { nonLatinTarget, latinOnly } from './scripts.js';
 
 const api = globalThis.chrome;
 const CAPITALISES = new Set(['de', 'lb']); // German capitalises every noun, so a capitalised phrase there says nothing about names
@@ -34,12 +35,40 @@ async function classify({ lang, texts = [], ctxTexts = [], htmlLang, related, ct
       if (kind) { verdicts[k] = { v: 'name', reason: 'Looks like a name', kind }; continue; }
       if (verify !== false) v = await verifier.verify(texts[k], lang, v, c.related, { shape: !CAPITALISES.has(lang) && nameShape(texts[k]), sources: c.sources || [] });
       v = guardShort(texts[k], v, lang, c.related);
+      // On a page in another script, Latin text that merely looks like a name (models disagree, every word capitalised) is listed for a decision
+      // ("Wisight Sytems Developer"), not silently counted as a name. Names from the built-in lists were already taken out above.
+      if (v.v === 'name' && nonLatinTarget(lang) && latinOnly(texts[k])) v = { v: 'unsure', reason: 'Name or title? Latin letters on a page in another script', votes: v.votes };
       // an unclear text made only of English words must not be cleared later by its section's verdict on a non-English page
       if (v.v === 'unsure' && lang !== 'en' && allEnglish(texts[k])) v = { ...v, enVocab: true };
+      // every word also a word of the target language (by its word list: "Status", "Export" on a German page): genuinely shared vocabulary
+      if (v.v === 'unsure' && lang !== 'en' && sharedEntirely(texts[k], lang)) v = { ...v, shared: true };
       verdicts[k] = v.v === 'bad' && isLabel(texts[k]) ? { ...v, label: true } : v; // a warning on plain interface words is not a name, whatever its capitals say
     }
   }));
   return { verdicts, ctx: { sources: c.sources }, models: verifier.status() };
+}
+
+// "Page's own language". Many apps switch the interface language without updating <html lang>, which then keeps saying "en".
+// English is where untranslated text comes from, so the two directions differ:
+//   - the page declares English (or nothing) but most of its longer text is another language (50%+): it is a translation in progress,
+//     check it in that language (its English leftovers are what the check is for);
+//   - the page declares another language: keep it, even if much of the page is still English (that English is the untranslated part),
+//     unless the declared language is essentially absent (under 10%) and another one clearly dominates (60%+): a stale lang attribute.
+function pageLanguage(texts, declaredRaw) {
+  const declared = declaredRaw ? norm(declaredRaw) : '';
+  const { tally, total } = engine.shares(texts);
+  const g = (l) => groupOf(l)[0];
+  const ranked = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+  const top = ranked[0];
+  const topOther = ranked.find(([l]) => l !== 'en');
+  const declaredShare = declared ? Object.entries(tally).filter(([l]) => g(l) === g(declared)).reduce((a, [, v]) => a + v, 0) : 0;
+  let lang = declared;
+  if (total >= 60) {
+    if ((!declared || declared === 'en') && topOther && topOther[1] >= 0.5) lang = topOther[0];
+    else if (declared && declared !== 'en' && top && declaredShare < 0.1 && top[1] >= 0.6 && g(top[0]) !== g(declared)) lang = top[0];
+  }
+  if (!lang && top && total >= 60 && top[1] >= 0.4) lang = top[0]; // no lang attribute: the page's own text, when there is enough of it
+  return { lang, declared, detected: top ? top[0] : '', share: top ? Math.round(top[1] * 100) : 0, declaredShare: Math.round(declaredShare * 100) };
 }
 
 // ---------- Sites checked automatically ----------
@@ -89,6 +118,10 @@ api.runtime.onMessage.addListener((msg, sender, send) => {
   if (msg?.type === 'tc-classify') {
     classify(msg).then(send, (e) => send({ error: String(e) }));
     return true;
+  }
+  if (msg?.type === 'tc-pagelang') { // "Page's own language": the declared language, unless the page's text is clearly in another one
+    send(pageLanguage(msg.texts || [], msg.declared || ''));
+    return false;
   }
   if (msg?.type === 'tc-dominant') { // language of a document that doesn't declare one (PDFs)
     send({ lang: engine.dominant(msg.texts || []) });

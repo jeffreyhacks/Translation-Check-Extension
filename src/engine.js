@@ -8,12 +8,8 @@ export { EN_SINGLE, EN_FN, EN_WEAK };
 
 const TINY = new Set(supportedLanguages.map(toISO2));
 
-export const TARGET_SCRIPTS = {
-  ru: ['cyrillic'], uk: ['cyrillic'], bg: ['cyrillic'],
-  ar: ['arabic'], fa: ['arabic'], ur: ['arabic'], he: ['hebrew'],
-  hi: ['devanagari'], bn: ['bengali'], ta: ['tamil'], te: ['telugu'],
-  th: ['thai'], el: ['greek'], ja: ['han', 'kana'], zh: ['han'], ko: ['hangul'],
-};
+import { TARGET_SCRIPTS } from './scripts.js';
+export { TARGET_SCRIPTS };
 const SAME_SCRIPT = [['ru', 'uk', 'bg', 'be', 'sr'], ['ar', 'fa', 'ur'], ['hi', 'mr']];
 const SCRIPT_RE = {
   latin: /\p{Script=Latin}/gu, cyrillic: /\p{Script=Cyrillic}/gu, arabic: /\p{Script=Arabic}/gu,
@@ -100,6 +96,7 @@ export function targetCompetes(text, lang, other, related = true) {
 // is guessing, so its vote does not count.
 const LIKELY = new Set('en es fr de it pt nl sv da no fi pl cs sk hu ro bg hr el tr ru uk ar fa he ur hi bn ta te th vi id ms sw ja ko zh ca sr bs sl lt lv et is be mk sq hy ka eu gl af cy ga mt mr gu kn ml pa ne si km lo my mn az kk uz'.split(' '));
 export const plausible = (l) => LIKELY.has(l);
+const letterCount = (t) => (t.match(/\p{L}/gu) || []).length;
 // Latin-script languages most pages are written in: the shortlist to re-ask when a model's label can't be right ("Czech" for plain-ASCII Dutch).
 const LATIN_COMMON = 'en es fr de it pt nl sv da no fi pl cs sk hu ro hr sl tr id ms vi ca'.split(' ');
 
@@ -166,9 +163,19 @@ export function createEngine(cld = async () => null) {
     const tinyOK = group.some((g) => TINY.has(g));
     let sT = 0, sO = 0, other = '';
 
-    if (words.length === 1 && LOANWORDS.has(words[0])) return OK;
+    if (words.length === 1 && LOANWORDS.has(words[0]) && !nonLatinTarget) return OK; // ("Home" in Latin letters on a Hindi page is not a loanword)
     // English page: if every word is in the English dictionary, the text is English, whatever the models make of a few words
     if (lang === 'en' && allEnglish(text)) return OK;
+    // Non-Latin page (Hindi, Arabic, Russian, Chinese…) and short Latin-script text made only of English dictionary words ("technical • impatient"):
+    // two independent hard facts (wrong script, English words), so the models' scattered guesses on two words don't matter. Names and brands
+    // are left to the usual checks: a phrase where every word is capitalised ("Apple Music") only counts when it is plain interface wording.
+    // Title case too ("Inventory Management"): known names and brands ("Apple Music") are taken out afterwards by the name lists. A single
+    // capitalised word only counts when it is interface wording ("Home", "Settings"); others ("Logo", "Notion") stay for the name checks.
+    if (nonLatinTarget && words.length <= 3 && letterCount(text) >= 4 && allEnglish(text)) {
+      const iface = (w) => EN_SINGLE.has(w) || EN_FN.has(w) || EN_WEAK.has(w);
+      const t0 = text.trim()[0];
+      if (words.length >= 2 || t0 === t0.toLowerCase() || iface(words[0])) return bad('en', 'Looks like English text');
+    }
     if (lang !== 'en') { // text made up entirely of English-only UI wording
       const { nonN, fully } = englishScore(words, lang);
       if (fully && (nonN.length >= 2 || words.length >= 2 || EN_SINGLE.has(nonN[0]))) return bad('en', 'Looks like English text');
@@ -265,5 +272,26 @@ export function createEngine(cld = async () => null) {
     return best && best[1] / total >= 0.4 ? best[0] : null;
   }
 
-  return { classify, pageContext, dominant };
+  /** Share of each language in a page's longer texts, by length: { tally: {hi: 0.93, en: 0.07}, total } (used to resolve "Page's own language"). */
+  function shares(texts) {
+    const tally = {}, member = {};
+    let total = 0;
+    for (const t of texts.slice(0, 80)) {
+      if (t.length < 30) continue;
+      // equivalents added up first (a short Danish sentence reads as Norwegian 0.14 + Danish 0.11): confident, or clearly ahead of the next language
+      const by = {};
+      for (const r of detectAll(t)) { if (NOISE.has(r.lang)) continue; const l = norm(r.lang), k = groupOf(l)[0]; by[k] = (by[k] || 0) + r.accuracy; member[l] = (member[l] || 0) + r.accuracy * t.length; }
+      const [best, second] = Object.entries(by).sort((a, b) => b[1] - a[1]);
+      if (!best || !(best[1] >= 0.5 || (best[1] >= 0.1 && best[1] >= 2 * (second ? second[1] : 0)))) continue;
+      const g = best[0];
+      tally[g] = (tally[g] || 0) + t.length; total += t.length;
+    }
+    for (const k of Object.keys(tally)) tally[k] /= total || 1;
+    // name each group by its strongest member across the page ("da" for a Danish page, not the group's first entry "no")
+    const named = {};
+    for (const [g, v] of Object.entries(tally)) { const m = groupOf(g).filter((x) => member[x]).sort((a, b) => member[b] - member[a])[0] || g; named[m] = v; }
+    return { tally: named, total };
+  }
+
+  return { classify, pageContext, dominant, shares };
 }

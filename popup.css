@@ -86,7 +86,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visi
 .banner button{flex:none;padding:4px 10px;border-radius:12px;background:var(--accent);color:var(--bg);font-weight:600;font-size:12px}
 
 /* tabs, nav */
-.tabs{display:flex;gap:4px;margin-top:12px}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;margin-top:12px}
 .tab,.tabs button{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:14px;color:var(--muted)}
 .tabs button:hover{background:var(--panel)}
 .tabs button[aria-selected=true]{background:var(--panel);color:var(--ink);font-weight:600}
@@ -114,8 +114,11 @@ li.current>button:first-child{outline:2px solid var(--c);outline-offset:-2px}
 .pip.other{background:var(--bad)} .pip.target{background:var(--ok)}
 .pips.confirmed{color:var(--ok)}
 .check{width:11px;height:11px;color:var(--ok)}
-li .ignore-btn{align-self:center;padding:4px 6px;border-radius:8px;color:var(--muted);font-size:11px}
-li .ignore-btn:hover{background:var(--panel);color:var(--ink)}
+li .acts{display:flex;flex-direction:column;justify-content:center;gap:2px}
+li .ignore-btn,li .mark-btn{padding:4px 6px;border-radius:8px;color:var(--muted);font-size:11px;white-space:nowrap}
+li .ignore-btn:hover,li .mark-btn:hover{background:var(--panel);color:var(--ink)}
+li .mark-btn{color:var(--bad)}
+.ignore h3.sub{margin:8px 0 2px;font-size:11px;font-weight:600;color:var(--muted)}
 .empty{padding:14px;text-align:center;color:var(--muted)}
 
 /* searchable language picker (native list ignores the theme, so this one is themed explicitly) */
@@ -159,3 +162,23 @@ body.picking{min-height:330px}
 .agree .pips{margin-left:0}
 .stat span{font-size:12px}
 .chip{font-size:11.5px}
+
+/* 2.0.6: grouped strings, context, learned rules */
+.tag.count{background:var(--accent);color:var(--bg)}
+.where{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.where b{color:var(--ink);font-weight:600}
+.near{color:var(--muted);font-size:11px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fix{color:var(--ok);font-weight:600}
+.banner.learnt{background:rgba(31,157,107,.13)}
+.learned{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px}
+.learned li{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:8px;background:var(--bg);font-size:11px;color:var(--muted)}
+.learned li span{flex:1;min-width:0;overflow-wrap:anywhere}
+.learned li button{flex:none;padding:2px 6px;border-radius:8px;color:var(--muted);font-size:11px}
+.learned li button:hover{background:var(--panel);color:var(--ink)}
+.learned li.empty{background:none;padding:0 2px}
+.has-occ{flex-wrap:wrap}
+.has-occ>button:first-child{flex:1 1 0}
+.has-occ .acts{order:2}
+.occnav{order:3;flex-basis:100%;display:flex;align-items:center;justify-content:center;gap:6px;margin-top:-2px;color:var(--muted);font-size:11px}
+.occnav .icon.sm{width:24px;height:24px;font-size:16px;line-height:1}
+.occpos{min-width:84px;text-align:center}

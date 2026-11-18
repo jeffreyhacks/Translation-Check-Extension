@@ -9,7 +9,7 @@ class Q(http.server.SimpleHTTPRequestHandler):
 socketserver.ThreadingTCPServer.allow_reuse_address = True; socketserver.ThreadingTCPServer.daemon_threads = True
 threading.Thread(target=socketserver.ThreadingTCPServer(('127.0.0.1', 8799), Q).serve_forever, daemon=True).start()
 EXT = tempfile.mkdtemp(prefix='tc-ext-')
-for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js']: shutil.copy(ROOT/f, EXT)
+for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js', 'learn.js']: shutil.copy(ROOT/f, EXT)
 shutil.copytree(ROOT/'icons', pathlib.Path(EXT)/'icons'); shutil.copytree(ROOT/'vendor', pathlib.Path(EXT)/'vendor')
 B = 'http://127.0.0.1:8799'
 SHOTS = ROOT/'test'/'e2e'/'shots'; SHOTS.mkdir(exist_ok=True)
@@ -62,7 +62,7 @@ with sync_playwright() as p:
     reg = sw.evaluate("async () => (await chrome.scripting.getRegisteredContentScripts()).map(s => ({id: s.id, matches: s.matches, persist: s.persistAcrossSessions}))")
     t('switch on: the background worker registered the page script for this site', any(r['id'] == 'auto-127.0.0.1' and r['persist'] for r in reg), reg)
     de = ctx.new_page(); de.goto(B + '/de.html'); de.bring_to_front(); time.sleep(5)
-    marks = de.evaluate("[...CSS.highlights.keys()].filter(k => /^tc-[a-z0-9]{6}-(bad|unsure|bug)$/.test(k)).length")
+    marks = de.evaluate("[...CSS.highlights.keys()].filter(k => /^tc2-[a-z0-9]{6}-(bad|unsure|bug)$/.test(k)).length")
     t('a page opened later is checked automatically, with no click on the toolbar', marks >= 1, marks)
     pop.bring_to_front(); pop.click('label.opt:has(#auto) i'); time.sleep(2)
     reg2 = sw.evaluate("async () => (await chrome.scripting.getRegisteredContentScripts()).map(s => s.id)")

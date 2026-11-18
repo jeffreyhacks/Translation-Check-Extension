@@ -54,9 +54,14 @@
       <h2>This site</h2>
       <label class="opt"><input type="checkbox" id="auto"><i></i><span class="txt"><span class="t">Check <b id="hostName">site</b> automatically</span><span class="d">Runs when the site loads</span></span></label>
       <details class="ignore">
-        <summary>Ignore list</summary>
+        <summary>Ignore &amp; marked lists</summary>
         <textarea id="ignoreSite" rows="2" placeholder="This site — one term per line"></textarea>
         <textarea id="ignoreGlobal" rows="2" placeholder="All sites — one term per line"></textarea>
+        <label class="opt"><input type="checkbox" id="learn" checked><i></i><span class="txt"><span class="t">Learn from Ignore</span><span class="d">After 3 similar Ignores, skip the rest automatically</span></span></label>
+        <ul id="learnedList" class="learned" aria-label="Learned rules"></ul>
+        <h3 class="sub">Marked untranslated</h3>
+        <textarea id="markedSite" rows="2" placeholder="This site — always listed as untranslated, one per line"></textarea>
+        <textarea id="markedGlobal" rows="2" placeholder="All sites — one per line"></textarea>
         <div class="row"><button id="impIgnore" class="ghost">Import</button><button id="expIgnore" class="ghost">Export</button><input type="file" id="impFile" accept="application/json" hidden></div>
       </details>
     </div>
@@ -87,6 +92,10 @@
       <span id="mismatchText"></span>
       <button id="mismatchFix"></button>
     </div>
+    <div id="learnNote" class="banner learnt" hidden role="status">
+      <span id="learnText"></span>
+      <button id="learnUndo">Undo</button>
+    </div>
 
     <div class="tabs" role="tablist">
       <button role="tab" id="tabBad" aria-selected="true" title="Not translated"><i class="dot bad"></i><span class="lbl">Untranslated</span><span class="n">0</span></button>
@@ -105,6 +114,7 @@
     <ul id="list"></ul>
   </section>
 
+  <script src="learn.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

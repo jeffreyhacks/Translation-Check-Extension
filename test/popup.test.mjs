@@ -30,7 +30,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
     i18n: { getUILanguage: () => 'en-US' },
     storage: { local: { get: async () => store, set: async (o) => Object.assign(store, o) } },
     tabs: { query: async () => [{ id: 5, url: tabUrl }], update: async (id, o) => updates.push([id, o]),
-      sendMessage: async (id, m) => { sent.push(m); return m.type === 'scan' ? RESULT : m.type === 'status' ? { result: null } : m.type === 'export' ? { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: RESULT.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) } : { ok: true }; },
+      sendMessage: async (id, m) => { sent.push(m); const R = o.result || RESULT; return m.type === 'scan' ? R : m.type === 'status' ? { result: null } : m.type === 'export' ? (o.export || { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: R.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) }) : { ok: true }; },
       onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
     scripting: { executeScript: async () => {}, registerContentScripts: async (a) => reg.push(...a), unregisterContentScripts: async () => {} },
     permissions: { request: (q) => { perms.push(q); return o.hold ? new Promise(() => {}) : Promise.resolve(permAnswer); }, remove: async (q) => { removed.push(q); return true; }, contains: async () => contains },
@@ -60,6 +60,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
   let fetchN = 0, fetchesBeforeGrant = 0;
   const realFetchCount = () => { fetchN++; if (!perms.length) fetchesBeforeGrant++; };
   w.fetch = async () => (realFetchCount(), fetchOk || (o.fileGrantFixes && perms.some((q) => q.origins[0] === 'file:///*') && permAnswer) ? { ok: true, arrayBuffer: async () => new Uint8Array([37, 80, 68, 70]).buffer } : { ok: false, status: 403 });
+  if (o.learn !== false) w.eval(fs.readFileSync('learn.js', 'utf8')); // loaded before popup.js, as in popup.html
   w.eval(fs.readFileSync('popup.js', 'utf8'));
   await sleep(50);
   const scanBtn = w.document.querySelector('#scan');
@@ -93,7 +94,7 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('popup: settings drawer is collapsed by default, language field is labelled', p.$('#settings').hidden && p.$('#result').hidden && /Page should be in/.test(p.$('.cap').textContent) && p.$('h1').textContent === 'Translation Check');
   p.$('#settingsBtn').click();
   t('popup: gear opens the settings drawer', !p.$('#settings').hidden && p.$('#settingsBtn').getAttribute('aria-expanded') === 'true');
-  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 4 && p.d.querySelectorAll('#settings .opt .d').length === 9 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
+  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 4 && p.d.querySelectorAll('#settings .opt .d').length === 10 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
   t('popup: drawer has strictness segments and the new model switches', p.d.querySelectorAll('input[name=mode]').length === 3 && p.$('#verify').checked && !p.$('#confirmed').checked);
   t('popup: side-panel button shown in popup', p.$('#openPanel').hidden === false);
   t('popup: button says "Check page" on web pages', p.$('#scanLabel').textContent === 'Check page');
@@ -182,6 +183,37 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   p.$('#scan').click(); await sleep(60);
   t('ignore: a fresh "Check page" still starts on Untranslated', p.$('#tabBad').getAttribute('aria-selected') === 'true');
 }
+// ---- Unclear → mark as untranslated (Ignore stays) ----
+{
+  const p = await boot(); p.$('#scan').click(); await sleep(50);
+  p.$('#tabUnsure').click();
+  const row = p.$('#list li');
+  t('mark: an unclear row has both "Untranslated" and "Ignore"', !!row.querySelector('.mark-btn') && row.querySelector('.mark-btn').textContent === 'Untranslated' && !!row.querySelector('.ignore-btn'));
+  p.$('#tabBad').click();
+  t('mark: untranslated rows have no "Untranslated" button', ![...p.d.querySelectorAll('#list .mark-btn')].some((b) => b.textContent === 'Untranslated'));
+  p.$('#tabUnsure').click();
+  p.$('#list .mark-btn').click(); await sleep(90);
+  const sc = p.sent.filter((m) => m.type === 'scan').pop();
+  t('mark: the re-check carries the marked text', sc.marked.includes('Lorem ipsum'), JSON.stringify(sc.marked));
+  t('mark: saved for this site', p.store.marked?.sites?.['shop.example.com']?.includes('Lorem ipsum'), JSON.stringify(p.store.marked));
+  t('mark: you stay on the Unclear tab, with a note', p.$('#tabUnsure').getAttribute('aria-selected') === 'true' && /moved to Untranslated/.test(p.$('#status').textContent), p.$('#status').textContent);
+  t('mark: shown in Settings › marked list', p.$('#markedSite').value === 'Lorem ipsum');
+  // ignoring a marked text takes it off the marked list (latest decision wins), and the other way round
+  p.$('#tabUnsure').click(); p.$('#list .ignore-btn').click(); await sleep(90);
+  t('mark: Ignore afterwards removes it from the marked list', !p.store.marked.sites['shop.example.com'].includes('Lorem ipsum') && p.store.ignore.sites['shop.example.com'].includes('Lorem ipsum'));
+  p.$('#tabUnsure').click(); p.$('#list .mark-btn').click(); await sleep(90);
+  t('mark: marking afterwards removes it from the ignore list', !p.store.ignore.sites['shop.example.com'].includes('Lorem ipsum') && p.store.marked.sites['shop.example.com'].includes('Lorem ipsum'));
+  p.$('#expIgnore').click(); await sleep(30);
+  t('mark: exported with the ignore list', p.downloads.some((d) => d.name === 'translation-check-ignore-list.json'));
+}
+{
+  const R = { ...RESULT, issues: [{ id: 9, verdict: 'bad', kind: 'text', text: 'Truecost', reason: 'Marked untranslated by you', marked: true, len: 8 }] };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: R, store: { marked: { global: [], sites: { 'shop.example.com': ['Truecost'] } } } });
+  p.$('#scan').click(); await sleep(50);
+  t('mark: a marked item offers Unmark next to Ignore', p.$('#list .mark-btn')?.textContent === 'Unmark' && !!p.$('#list .ignore-btn'));
+  p.$('#list .mark-btn').click(); await sleep(90);
+  t('mark: Unmark removes it and re-checks', !p.store.marked.sites['shop.example.com'].includes('Truecost') && !p.sent.filter((m) => m.type === 'scan').pop().marked.includes('Truecost'));
+}
 // ---- PDF in the browser's viewer ----
 {
   const p = await boot('popup.html', 'https://docs.example.org/files/handbook.pdf?download=1');
@@ -249,6 +281,80 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
 {
   const p = await boot('panel.html');
   t('panel: loads in side-panel mode (no side-panel button)', p.$('#openPanel').hidden === true && p.d.body.classList.contains('panel'));
+}
+
+// ---------- 2.0.6: grouped strings, context, learning, exports ----------
+const G = {
+  ...RESULT, score: 50,
+  stats: { ...RESULT.stats, badN: 4, unsureN: 0, bugN: 0, learnedN: 6 },
+  issues: [
+    { id: 10, verdict: 'bad', kind: 'text', text: 'Add to cart', detected: 'en', reason: 'Looks like English text', len: 33, count: 3, slot: 'button.cart-btn',
+      context: { kind: 'button', path: 'Navigation “Main menu”' },
+      occ: [{ id: 10, kind: 'text', where: 'button · Navigation “Main menu”', before: 'Inicio Productos', after: '' },
+        { id: 11, kind: 'text', where: 'button · Main › “Camiseta azul”', before: 'Algodón orgánico', after: '' },
+        { id: 12, kind: 'text', where: 'button · Main › “Pantalón negro”', before: 'Corte recto', after: '' }] },
+    { id: 13, verdict: 'bad', kind: 'text', text: 'SKU-1001', detected: 'en', reason: 'Detected as another language', len: 8, count: 1, occ: [{ id: 13, kind: 'text', where: 'text · Main', before: '', after: '' }] },
+  ],
+};
+{
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: G });
+  p.$('#scan').click(); await sleep(60);
+  const row = p.$('#list li.bad');
+  t('206 grouped: one row with ×3 for three copies', /×3/.test(row.textContent) && p.d.querySelectorAll('#list li.bad').length === 2, row.textContent);
+  t('206 context: the row says where the text is and what is around it', /button · Navigation “Main menu”/.test(row.querySelector('.where').textContent) && /Inicio Productos/.test(row.querySelector('.near').textContent));
+  const btn = () => p.$('#list li.bad button');
+  btn().click(); await sleep(20);
+  t('206 grouped: first click goes to the first copy', p.sent.filter((m) => m.type === 'focus').pop().id === 10 && /Copy 1 of 3/.test(p.$('#list li.bad').textContent));
+  btn().click(); await sleep(20);
+  t('206 grouped: clicking again goes to the next copy, with its own context', p.sent.filter((m) => m.type === 'focus').pop().id === 11 && /Copy 2 of 3/.test(p.$('#list li.bad').textContent) && /Camiseta azul/.test(p.$('#list li.bad .where').textContent));
+  btn().click(); await sleep(20); btn().click(); await sleep(20);
+  t('206 grouped: after the last copy it starts again at the first', p.sent.filter((m) => m.type === 'focus').pop().id === 10);
+  t('206 nav: the selected group has previous/next copy buttons', !!p.$('#list li.bad .occ-prev') && /Copy 1 of 3/.test(p.$('#list li.bad .occnav').textContent));
+  p.$('#list li.bad .occ-prev').click(); await sleep(20);
+  t('206 nav: previous from the first copy goes to the last', p.sent.filter((m) => m.type === 'focus').pop().id === 12 && /Copy 3 of 3/.test(p.$('#list li.bad .occnav').textContent));
+  p.$('#list li.bad .occ-prev').click(); await sleep(20);
+  t('206 nav: previous again goes back one copy', p.sent.filter((m) => m.type === 'focus').pop().id === 11);
+  p.d.querySelectorAll('#list li.bad > button:first-child')[1].click(); await sleep(20); // another item
+  t('206 nav: other items have no copy buttons', !p.d.querySelectorAll('#list li.bad')[1].querySelector('.occnav'));
+  p.d.querySelectorAll('#list li.bad > button:first-child')[0].click(); await sleep(20); // back to the group
+  t('206 nav: coming back to a group resumes at the copy you were on', p.sent.filter((m) => m.type === 'focus').pop().id === 11 && /Copy 2 of 3/.test(p.$('#list li.bad .occnav')?.textContent), JSON.stringify([p.sent.filter((m) => m.type === 'focus').slice(-3), p.$('#list').textContent.slice(0, 300)]));
+  t('removed: no spelling or layout tabs, no stretch button, no Quality settings', !p.$('#tabSpell') && !p.$('#tabLayout') && !p.$('#stretch') && !p.$('#spell') && !p.$('#layout'));
+  t('206 score: the score and the untranslated count', p.$('#score').textContent === '50%' && p.$('#nBad').textContent === '4');
+  t('206 chips: rules learned from Ignore show how many texts they skipped', /6 auto-ignored/.test(chipsText(p)), chipsText(p));
+  // CSV keeps the first eight columns, adds the new ones at the end
+  p.$('#expCsv').click(); await sleep(50);
+  const csv = await readBlob(p.w, p.downloads.find((d) => d.size));
+  const head = csv.replace(/^\ufeff/, '').split('\r\n')[0];
+  t('206 csv: original columns first, then occurrences, context, surrounding text, all locations', head === '"type","text","reason","detected language","model agreement","where","selector","document","occurrences","context","surrounding text","all locations"', head);
+  t('206 csv: the grouped row has its count', /"Add to cart".*"3"/.test(csv));
+}
+{
+  // learning: three Ignores of codes on one site learn a rule, with an Undo
+  const result = { ...G, issues: [1, 2, 3].map((k) => ({ id: k, verdict: 'bad', kind: 'text', text: `SKU-100${k}`, detected: 'en', reason: 'x', len: 8, count: 1, occ: [{ id: k, kind: 'text', where: '' }] })) };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result });
+  p.$('#scan').click(); await sleep(60);
+  for (let k = 0; k < 2; k++) { p.d.querySelectorAll('#list .ignore-btn')[k].click(); await sleep(60); }
+  t('206 learn: two Ignores learn nothing yet', p.$('#learnNote').hidden && !(p.store.learn.rules || []).length);
+  p.d.querySelectorAll('#list .ignore-btn')[2].click(); await sleep(80);
+  t('206 learn: the third similar Ignore learns a rule and says so', !p.$('#learnNote').hidden && /codes like/.test(p.$('#learnText').textContent) && p.store.learn.rules.length === 1, p.$('#learnText').textContent);
+  t('206 learn: the ignore list itself is unchanged in format (exact terms per site)', JSON.stringify(p.store.ignore.sites['shop.example.com']) === '["SKU-1001","SKU-1002","SKU-1003"]');
+  const last = p.sent.filter((m) => m.type === 'scan').pop();
+  t('206 learn: the next check sends the learned rule to the page', last.learned.length === 1 && last.learned[0].type === 'shape' && last.learned[0].value === 'code');
+  t('206 learn: the rule is listed in settings with Remove', /codes like/.test(p.$('#learnedList').textContent) && !!p.$('#learnedList button'));
+  p.$('#learnUndo').click(); await sleep(80);
+  t('206 learn: Undo removes the rule and it is not learned again', p.$('#learnNote').hidden && !p.store.learn.rules.length && p.store.learn.rejected.length === 1 && !p.sent.filter((m) => m.type === 'scan').pop().learned.length);
+  p.$('#learn').checked = false; p.$('#learn').dispatchEvent(new p.w.Event('change')); await sleep(20);
+  t('206 learn: can be switched off', p.store.learn.on === false && /Learning is off/.test(p.$('#learnedList').textContent));
+  p.$('#expIgnore').click(); await sleep(30);
+  const exp = JSON.parse(await readBlob(p.w, p.downloads.filter((d) => d.size).pop()));
+  t('206 learn: ignore-list export is version 2 and still has global/sites', exp.version === 2 && Array.isArray(exp.global) && exp.sites['shop.example.com'].length === 3 && Array.isArray(exp.learned));
+}
+{
+  // a learn.js that failed to load must not break the popup: Ignore works exactly as before
+  const p = await boot('popup.html', 'https://shop.example.com/x', { learn: false });
+  p.$('#scan').click(); await sleep(60);
+  p.$('#list .ignore-btn').click(); await sleep(80);
+  t('206 learn: without learn.js, Ignore still saves the term and re-checks', JSON.stringify(p.store.ignore.sites['shop.example.com']) === '["Add to cart"]' && p.sent.filter((m) => m.type === 'scan').length === 2);
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

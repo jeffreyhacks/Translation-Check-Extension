@@ -5,8 +5,9 @@ const common = { bundle: true, minify: true, format: 'iife', platform: 'browser'
 await build({ ...common, entryPoints: ['src/content.src.js'], outfile: 'content.js' });
 await build({ ...common, entryPoints: ['src/background.src.js'], outfile: 'background.js' });
 await build({ ...common, entryPoints: ['src/pdfcheck.js'], outfile: 'pdfcheck.js', globalName: 'TCPDF' });
+await build({ ...common, entryPoints: ['src/learn.js'], outfile: 'learn.js', globalName: 'TCLearn' }); // ignore-list learning, used by the popup
 fs.mkdirSync('vendor', { recursive: true });
 for (const f of ['pdf.min.js', 'pdf.worker.min.js']) fs.copyFileSync(`node_modules/pdfjs-dist/build/${f}`, `vendor/${f}`);
 fs.copyFileSync('node_modules/pdfjs-dist/LICENSE', 'vendor/pdfjs-LICENSE.txt');
 fs.writeFileSync('panel.html', fs.readFileSync('popup.html', 'utf8').replace('<body>', '<body class="panel">'));
-console.log('built: content.js, background.js, pdfcheck.js, panel.html');
+console.log('built: content.js, background.js, pdfcheck.js, learn.js, panel.html');
