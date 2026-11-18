@@ -500,7 +500,7 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
   }
 
   function clearAll() {
-    clearTimeout(timer); dirty.clear();
+    clearTimeout(timer); dirty.clear(); unfocus();
     observers.forEach((o) => o.disconnect()); observers = []; observed = new WeakSet();
     resetMarks();
     purgeForeign();
@@ -509,25 +509,39 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
     state = null; last = null; ctxCache = new WeakMap();
   }
 
+  // One "you are here" mark at a time. Each jump clears the previous one first, so a quick second click is never undone by the first click's
+  // timer (that used to delete the new mark early, so stepping through copies showed nothing). The mark stays for a few seconds.
+  let focused = null;
+  function unfocus() {
+    if (!focused) return;
+    clearTimeout(focused.timer);
+    try { focused.win.CSS.highlights.delete(K.focus); } catch (e) { /* frame gone */ }
+    focused.el?.removeAttribute('data-tc-focus');
+    focused = null;
+  }
   function focusIssue(id) {
     const t = targets.get(id);
     if (!t) return false;
     const n = nodeOf(t);
+    if (!n.isConnected) return false;
+    unfocus();
     const el = t.kind === 'text' ? n.parentElement || n.parentNode?.host : n;
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const win = winOf(n);
+    focused = { win, el: null, timer: 0 };
     if (t.kind === 'text') {
-      const win = winOf(n);
       const r = n.ownerDocument.createRange();
       r.selectNodeContents(n);
       const h = new win.Highlight(r);
       h.priority = 10;
       ensureStyle(n.getRootNode());
       win.CSS.highlights.set(K.focus, h);
-      setTimeout(() => win.CSS.highlights.delete(K.focus), 2200);
     } else if (el) {
+      ensureStyle(el.getRootNode());
       el.setAttribute('data-tc-focus', NS);
-      setTimeout(() => el.removeAttribute('data-tc-focus'), 2200);
+      focused.el = el;
     }
+    focused.timer = setTimeout(unfocus, 6000);
     return true;
   }
 

@@ -100,6 +100,7 @@ export function targetCompetes(text, lang, other, related = true) {
 // is guessing, so its vote does not count.
 const LIKELY = new Set('en es fr de it pt nl sv da no fi pl cs sk hu ro bg hr el tr ru uk ar fa he ur hi bn ta te th vi id ms sw ja ko zh ca sr bs sl lt lv et is be mk sq hy ka eu gl af cy ga mt mr gu kn ml pa ne si km lo my mn az kk uz'.split(' '));
 export const plausible = (l) => LIKELY.has(l);
+const letterCount = (t) => (t.match(/\p{L}/gu) || []).length;
 // Latin-script languages most pages are written in: the shortlist to re-ask when a model's label can't be right ("Czech" for plain-ASCII Dutch).
 const LATIN_COMMON = 'en es fr de it pt nl sv da no fi pl cs sk hu ro hr sl tr id ms vi ca'.split(' ');
 
@@ -169,6 +170,14 @@ export function createEngine(cld = async () => null) {
     if (words.length === 1 && LOANWORDS.has(words[0])) return OK;
     // English page: if every word is in the English dictionary, the text is English, whatever the models make of a few words
     if (lang === 'en' && allEnglish(text)) return OK;
+    // Non-Latin page (Hindi, Arabic, Russian, Chinese…) and short Latin-script text made only of English dictionary words ("technical • impatient"):
+    // two independent hard facts (wrong script, English words), so the models' scattered guesses on two words don't matter. Names and brands
+    // are left to the usual checks: a phrase where every word is capitalised ("Apple Music") only counts when it is plain interface wording.
+    if (nonLatinTarget && words.length <= 3 && letterCount(text) >= 4 && allEnglish(text)) {
+      const raw = text.match(/\p{L}[\p{L}'’-]*/gu) || [];
+      const lower = raw.filter((w) => w[0] === w[0].toLowerCase()).length;
+      if (lower >= 1 || raw.every((w) => EN_SINGLE.has(w.toLowerCase()) || EN_FN.has(w.toLowerCase()))) return bad('en', 'Looks like English text');
+    }
     if (lang !== 'en') { // text made up entirely of English-only UI wording
       const { nonN, fully } = englishScore(words, lang);
       if (fully && (nonN.length >= 2 || words.length >= 2 || EN_SINGLE.has(nonN[0]))) return bad('en', 'Looks like English text');

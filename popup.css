@@ -173,3 +173,9 @@ body.picking{min-height:330px}
 .learned li button{flex:none;padding:2px 6px;border-radius:8px;color:var(--muted);font-size:11px}
 .learned li button:hover{background:var(--panel);color:var(--ink)}
 .learned li.empty{background:none;padding:0 2px}
+.has-occ{flex-wrap:wrap}
+.has-occ>button:first-child{flex:1 1 0}
+.has-occ .ignore-btn{order:2}
+.occnav{order:3;flex-basis:100%;display:flex;align-items:center;justify-content:center;gap:6px;margin-top:-2px;color:var(--muted);font-size:11px}
+.occnav .icon.sm{width:24px;height:24px;font-size:16px;line-height:1}
+.occpos{min-width:84px;text-align:center}

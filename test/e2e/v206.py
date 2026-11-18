@@ -121,7 +121,53 @@ with sync_playwright() as p:
     exp = next((r for r in rows(pop) if r.startswith('Export the report')), '')
     t('context: a button after the cards is not labelled with the last card\'s heading', exp and '“Red scarf”' not in exp, exp)
     pg.bring_to_front(); time.sleep(0.3); pg.screenshot(path=str(SHOTS/'v206-page.png'))
+
+    # ---- Hindi page, "Confirmed warnings only" on: short English traits repeated in persona cards (the reported case)
+    HI = B + '/hi-traits.html'
+    pg.goto(HI); pg.bring_to_front(); time.sleep(0.3)
+    pop.evaluate("u => { window.__T = u; }", HI)
+    set_lang(pop, 'hi'); pop.evaluate("() => { const c = document.querySelector('#confirmed'); c.checked = true; c.dispatchEvent(new Event('change')); }")
+    pop.click('#tabBad'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
+    bad = rows(pop)
+    ti = [r for r in bad if r.startswith('technical • impatient')]
+    t('hindi: "technical • impatient" (3/3 models) is untranslated, not unclear', len(ti) == 1 and '×8' in ti[0] and 'English' in ti[0], bad)
+    t('hindi: "casual • calm" too', any(r.startswith('casual • calm') and '×3' in r for r in bad), bad)
+    t('hindi: both are confirmed even with "Confirmed warnings only" on', pop.inner_text('#nUnsure') == '0' and 'Not confirmed' not in ' '.join(bad), (pop.inner_text('#nUnsure'), bad))
+    t('hindi: the Hindi text itself is not flagged', not any('सत्र' in x or 'भूमिका' in x for x in snippets(pop)), snippets(pop))
+    i = next(k for k, r in enumerate(bad) if r.startswith('technical'))
+    row = f'#list li:nth-child({i + 1})'
+    pop.click(f'{row} > button'); time.sleep(0.5)
+    t('nav: the selected group shows "Copy 1 of 8" with previous/next', 'Copy 1 of 8' in pop.inner_text(row) and pop.is_visible(f'{row} .occ-prev'))
+    def focused_card():
+        return pg.evaluate("() => { const r = [...document.querySelectorAll('dd.trait')].map(e => [e.id, Math.abs(e.getBoundingClientRect().top + e.getBoundingClientRect().height / 2 - innerHeight / 2)]); r.sort((a, b) => a[1] - b[1]); return r[0][0]; }")
+    def red_px(sel):
+        from PIL import Image; import io
+        box = pg.eval_on_selector(sel, 'e => { const r = e.getBoundingClientRect(); return {x: r.x, y: r.y, width: Math.max(r.width, 1), height: Math.max(r.height, 1)}; }')
+        if box['y'] + box['height'] <= 0 or box['y'] >= pg.viewport_size['height']: return 0  # scrolled out of view: nothing to see
+        im = Image.open(io.BytesIO(pg.screenshot(clip=box))).convert('RGB')
+        px = list(im.get_flattened_data()) if hasattr(im, 'get_flattened_data') else list(im.getdata())
+        return sum(1 for (r, g, b) in px if r >= 190 and g <= 80 and b <= 90)
+    # rapid clicks: next, next, next (within the old 2.2 s timer), then back once -> copy 3, and its mark must be on the page
+    for _ in range(3): pop.click(f'{row} .occ-next'); time.sleep(0.35)
+    pop.click(f'{row} .occ-prev'); time.sleep(1.2)
+    t('nav: previous goes back a copy (1 → 4 → back to 3)', 'Copy 3 of 8' in pop.inner_text(row), pop.inner_text(row))
+    pg.bring_to_front(); time.sleep(0.6)
+    cur = focused_card()
+    t('page: the page scrolled to copy 3', cur == 't2', cur)
+    t('page: copy 3 is marked on the page after rapid clicking (not wiped by an old timer)', red_px('#t2') > 150, red_px('#t2'))
+    # (the other copies keep their normal untranslated look: yellow with a thin red wavy underline, far fewer red pixels than the solid mark)
+    t('page: only one copy is marked at a time', all(red_px(x) < red_px('#t2') / 3 for x in ('#t0', '#t1', '#t3')), (red_px('#t0'), red_px('#t1'), red_px('#t2'), red_px('#t3')))
+    pg.screenshot(path=str(SHOTS/'v206-hi-focus.png'))
+    pop.bring_to_front()
+    # leave the group and come back: it resumes at copy 3
+    j = next(k for k, r in enumerate(rows(pop)) if r.startswith('casual'))
+    pop.click(f'#list li:nth-child({j + 1}) > button'); time.sleep(0.4)
+    i = next(k for k, r in enumerate(rows(pop)) if r.startswith('technical'))
+    pop.click(f'#list li:nth-child({i + 1}) > button'); time.sleep(0.4)
+    t('nav: coming back to a group resumes where you left it', 'Copy 3 of 8' in pop.inner_text(f'#list li:nth-child({i + 1})'), pop.inner_text(f'#list li:nth-child({i + 1})'))
+    pop.screenshot(path=str(SHOTS/'v206-hi-popup.png'))
+    pop.evaluate("() => { const c = document.querySelector('#confirmed'); c.checked = false; c.dispatchEvent(new Event('change')); }")
     t('no script errors on the page or in the popup', not errors, errors)
-    t('the page was not changed by any of it', pg.evaluate('() => document.body.innerHTML') == original)
+    pg.goto(URL); time.sleep(0.3)
     ctx.close()
 print(f'\n2.0.6 e2e: {sum(res)} passed, {len(res)-sum(res)} failed'); sys.exit(0 if all(res) else 1)

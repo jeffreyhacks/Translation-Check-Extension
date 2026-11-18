@@ -275,11 +275,20 @@ const G = {
   t('206 context: the row says where the text is and what is around it', /button · Navigation “Main menu”/.test(row.querySelector('.where').textContent) && /Inicio Productos/.test(row.querySelector('.near').textContent));
   const btn = () => p.$('#list li.bad button');
   btn().click(); await sleep(20);
-  t('206 grouped: first click goes to the first copy', p.sent.filter((m) => m.type === 'focus').pop().id === 10 && /1 of 3/.test(p.$('#list li.bad').textContent));
+  t('206 grouped: first click goes to the first copy', p.sent.filter((m) => m.type === 'focus').pop().id === 10 && /Copy 1 of 3/.test(p.$('#list li.bad').textContent));
   btn().click(); await sleep(20);
-  t('206 grouped: clicking again goes to the next copy, with its own context', p.sent.filter((m) => m.type === 'focus').pop().id === 11 && /2 of 3/.test(p.$('#list li.bad').textContent) && /Camiseta azul/.test(p.$('#list li.bad .where').textContent));
+  t('206 grouped: clicking again goes to the next copy, with its own context', p.sent.filter((m) => m.type === 'focus').pop().id === 11 && /Copy 2 of 3/.test(p.$('#list li.bad').textContent) && /Camiseta azul/.test(p.$('#list li.bad .where').textContent));
   btn().click(); await sleep(20); btn().click(); await sleep(20);
   t('206 grouped: after the last copy it starts again at the first', p.sent.filter((m) => m.type === 'focus').pop().id === 10);
+  t('206 nav: the selected group has previous/next copy buttons', !!p.$('#list li.bad .occ-prev') && /Copy 1 of 3/.test(p.$('#list li.bad .occnav').textContent));
+  p.$('#list li.bad .occ-prev').click(); await sleep(20);
+  t('206 nav: previous from the first copy goes to the last', p.sent.filter((m) => m.type === 'focus').pop().id === 12 && /Copy 3 of 3/.test(p.$('#list li.bad .occnav').textContent));
+  p.$('#list li.bad .occ-prev').click(); await sleep(20);
+  t('206 nav: previous again goes back one copy', p.sent.filter((m) => m.type === 'focus').pop().id === 11);
+  p.d.querySelectorAll('#list li.bad > button:first-child')[1].click(); await sleep(20); // another item
+  t('206 nav: other items have no copy buttons', !p.d.querySelectorAll('#list li.bad')[1].querySelector('.occnav'));
+  p.d.querySelectorAll('#list li.bad > button:first-child')[0].click(); await sleep(20); // back to the group
+  t('206 nav: coming back to a group resumes at the copy you were on', p.sent.filter((m) => m.type === 'focus').pop().id === 11 && /Copy 2 of 3/.test(p.$('#list li.bad .occnav')?.textContent), JSON.stringify([p.sent.filter((m) => m.type === 'focus').slice(-3), p.$('#list').textContent.slice(0, 300)]));
   t('206 tabs: spelling and layout tabs appear with their counts', !p.$('#tabSpell').hidden && p.$('#tabSpell .n').textContent === '1' && !p.$('#tabLayout').hidden && p.$('#tabLayout .n').textContent === '1');
   t('206 score: hints are not part of the score or the untranslated count', p.$('#score').textContent === '50%' && p.$('#nBad').textContent === '4');
   t('206 chips: rules learned from Ignore show how many texts they skipped', /6 auto-ignored/.test(chipsText(p)), chipsText(p));

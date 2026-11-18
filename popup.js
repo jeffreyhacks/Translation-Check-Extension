@@ -158,7 +158,6 @@ function render() {
     if (o && (o.before || o.after)) b.append(el('span', 'near', `${o.before ? o.before + ' ' : ''}[ … ]${o.after ? ' ' + o.after : ''}`));
     const meta = el('span', 'meta');
     if ((i.count || 1) > 1) { const c = el('span', 'tag count', `×${i.count}`); c.title = `Appears ${i.count} times on this page — click again to go to the next one`; meta.append(c); }
-    if (occ.length > 1 && idx === cursor) meta.append(el('span', 'tag', `${at + 1} of ${occ.length}`));
     if (i.fix && i.verdict === 'spell') meta.append(el('span', 'fix', '→ ' + i.fix));
     const det = i.detected && i.detected.length <= 3 ? nameOf(i.detected) : i.detected;
     if (det) meta.append(el('span', 'tag', det));
@@ -179,12 +178,21 @@ function render() {
     if (i.reason) b.append(el('span', 'why', i.reason));
     b.title = i.reason || 'Too short or ambiguous to judge';
     if (o && (o.before || o.after)) b.title = `${b.title}\n\n${o.before} ⟦${i.text}⟧ ${o.after}`.trim();
-    // a click on the selected row moves on to the next place the same text appears
+    // a click on the selected row moves on to the next place the same text appears; coming back to a row resumes where you left it
     b.addEventListener('click', () => {
-      if (cursor === idx && occ.length > 1) occAt.set(i.id, (at + 1) % occ.length); else if (cursor !== idx) occAt.set(i.id, 0);
+      if (cursor === idx && occ.length > 1) occAt.set(i.id, (at + 1) % occ.length);
       cursor = idx; focusRow(i); render();
     });
     li.append(b);
+    if (occ.length > 1 && idx === cursor) { // previous / next copy of this text
+      li.classList.add('has-occ');
+      const nav = el('div', 'occnav');
+      const go = (d) => { occAt.set(i.id, (at + d + occ.length) % occ.length); focusRow(i); render(); };
+      const prev = el('button', 'icon sm occ-prev', '‹'); prev.title = 'Previous place with this text'; prev.setAttribute('aria-label', prev.title); prev.addEventListener('click', () => go(-1));
+      const next = el('button', 'icon sm occ-next', '›'); next.title = 'Next place with this text'; next.setAttribute('aria-label', next.title); next.addEventListener('click', () => go(1));
+      nav.append(prev, el('span', 'occpos', `Copy ${at + 1} of ${occ.length}`), next);
+      li.append(nav);
+    }
     if ((i.verdict === 'bad' || i.verdict === 'unsure') && i.text.length <= 60) { // one-click "never flag this"
       const x = el('button', 'ignore-btn', 'Ignore');
       x.title = (i.count || 1) > 1 ? `Never flag this text (all ${i.count} places)` : 'Never flag this text';

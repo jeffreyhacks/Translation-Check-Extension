@@ -25,6 +25,14 @@ Load this folder in `chrome://extensions` (Developer mode → Load unpacked). Ne
    "help" are not English evidence on Dutch pages.
 3. Page-level logic: sentence context, source-language comparison (hreflang), and the "mostly translated" fallback for very short strings.
 
+## Short English on non-Latin pages
+On a Hindi, Arabic, Russian, Japanese or Chinese page (any page whose language isn't written in Latin letters), up to three Latin-script words
+that are all English dictionary words ("technical • impatient", "casual • calm") are untranslated English: two hard facts, the script and the
+dictionary, so the models' scattered guesses on two words don't matter. Names and brands are left alone (a phrase where every word is
+capitalised only counts when it is plain interface wording such as "Settings").
+A warning that rests on hard evidence like this is **confirmed** when no model reads the target language and two read some other language,
+even if they name different ones, so *Confirmed warnings only* no longer moves it to Unclear.
+
 ## Short words and look-alike languages
 Short strings such as "active", "archive", "contact" or "menu" are valid in several languages, so three models agreeing proves nothing.
 One such word on its own is shown as *unclear* (never as untranslated) unless it contains clearly English wording. A **phrase** of two words
@@ -63,8 +71,10 @@ vocabulary such as "Order History" or "Wish List" is a *label*, not a name, and 
 (German capitalises every noun). A single unknown capitalised word stays *unclear*.
 
 ## Repeated strings: one item, every place it appears
-The same text with the same verdict is listed once, with **×N**. Click it to go to the first place; click it again to go to the next one
-(**2 of 3**). The score, the counts and the toolbar badge still count every copy, so grouping changes only how the list reads.
+The same text with the same verdict is listed once, with **×N**. Click it to go to the first place; click it again, or use **‹ ›** under it
+(**Copy 2 of 3**), to move between the copies. Coming back to an item resumes at the copy you were on. The page marks the copy you jumped to
+for a few seconds (one at a time, also when you click quickly). The score, the counts and the toolbar badge still count every copy, so
+grouping changes only how the list reads.
 
 ## Context: where each string sits
 Every item says what it is and where: *button · Navigation “Main menu”*, *placeholder · Form “Newsletter” › field “Email”*,

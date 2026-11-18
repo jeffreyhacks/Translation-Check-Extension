@@ -1,6 +1,7 @@
 // 2.0.6: grouped strings with their locations, context capture, learned ignore rules, spelling/spacing hints, layout check and stretch test.
 // jsdom has no layout engine, so layout is measured here with stubbed boxes; test/e2e/layout.py checks it in real Chrome.
-import { loadNew, page, sleep } from './harness.mjs';
+import { loadNew, loadBg, page, sleep } from './harness.mjs';
+import { mask } from '../src/mask.js';
 import { JSDOM } from 'jsdom';
 import * as learn from '../src/learn.js';
 import { describe, slotOf } from '../src/context.js';
@@ -150,6 +151,46 @@ const SHOP = page(`
   t('stretch: returns a full result (nothing breaks without a layout engine)', r && r.stats && r.stretched === 35 && r.stretchFound === 0, JSON.stringify(r && { s: r.stretched, f: r.stretchFound }));
   t('stretch: live mode does not re-check because of the test', h.bgCalls.results === 0, String(h.bgCalls.results));
   t('stretch: without a check first it says so', (await loadNew(html).call({ type: 'stretch', pct: 35 })).error === 'Run a check first.');
+}
+
+// ---------- reported: 3/3 models said "not Hindi" but it was listed under Unclear ("Not confirmed by a second model") ----------
+{
+  const bg = loadBg();
+  // as the page script does: text that masking empties (brand-style words such as "WhatsApp") is skipped, never judged
+  const judge = async (lang, raw) => { const m = mask(raw, lang, null).text; if (!/\p{L}{2}/u.test(m)) return { v: 'skipped' }; return (await bg({ type: 'tc-classify', lang, related: true, verify: true, ctxTexts: [], texts: [m] })).verdicts[0]; };
+  for (const [lang, raw] of [['hi', 'technical • impatient'], ['hi', 'casual • calm'], ['ar', 'friendly • curious'], ['ru', 'Save changes'], ['ja', 'casual • calm'], ['zh', 'Export the report']]) {
+    const v = await judge(lang, raw);
+    t(`script+dictionary: "${raw}" on a ${lang} page is untranslated English and confirmed`, v.v === 'bad' && v.detected === 'en' && v.confirmed, JSON.stringify(v));
+  }
+  for (const raw of ['Google', 'Apple Music', 'WhatsApp', 'Rahul Sharma', 'Katalyst Arena', 'Microsoft Teams', 'YouTube']) {
+    const v = await judge('hi', raw);
+    t(`script+dictionary: name/brand "${raw}" on a Hindi page is not flagged`, v.v !== 'bad', JSON.stringify(v));
+  }
+  t('script+dictionary: Hindi text on a Hindi page is fine', (await judge('hi', 'सत्र विवरण')).v === 'ok');
+  const fr = await judge('fr', 'Service client');
+  t('labels unchanged: "Service client" keeps its French label', fr.detected !== 'en' || fr.v !== 'bad', JSON.stringify(fr));
+  const html = page(Array.from({ length: 8 }, (_, k) => `<div class="card"><h3>सत्र विवरण ${k + 1}</h3><dl><dt>ग्राहक प्रकार</dt><dd>technical • impatient</dd><dt>उद्देश्य</dt><dd>आपकी भूमिका निर्दिष्ट नहीं है, कृपया ग्राहक के साथ बातचीत शुरू करें।</dd></dl></div>`).join(''), 'hi');
+  const r = await scan(loadNew(html), { lang: 'hi', confirmedOnly: true });
+  const ti = r.issues.find((i) => i.text === 'technical • impatient');
+  t('confirmed-only: the reported case is untranslated (×8), not unclear', ti && ti.verdict === 'bad' && ti.count === 8 && ti.confirmed && !r.issues.some((i) => i.verdict === 'unsure'), JSON.stringify(r.issues.map((i) => [i.verdict, i.text, i.reason])));
+}
+
+// ---------- reported: stepping through copies quickly lost the page highlight ----------
+{
+  const html = page('<main>' + Array.from({ length: 4 }, (_, k) => `<p id="p${k}">Add to cart</p><p>Texto traducido al español número ${k} para la prueba de navegación.</p>`).join('') + '</main>', 'es');
+  const h = loadNew(html);
+  const r = await scan(h);
+  const g = r.issues.find((i) => i.text === 'Add to cart');
+  const reg = h.w.CSS.highlights._m;
+  const focusKey = () => [...reg.keys()].find((k) => /-focus$/.test(k));
+  for (const o of g.occ) await h.call({ type: 'focus', id: o.id }); // four quick clicks
+  const hl = reg.get(focusKey());
+  const node = hl && [...hl.s][0].startContainer;
+  t('focus: after quick clicks the last copy is marked', !!hl && (node.id === 'p3' || node.parentElement?.id === 'p3' || node.parentNode?.id === 'p3'), String(node?.nodeName));
+  await sleep(2500); // the old code's first timer (2.2 s) deleted the newest mark here
+  t('focus: an earlier click\'s timer does not wipe the newest mark', !!focusKey());
+  await sleep(4000);
+  t('focus: the mark goes away by itself after a few seconds', !focusKey());
 }
 
 console.log(`\n2.0.6 features: ${pass} passed, ${fail} failed`);
