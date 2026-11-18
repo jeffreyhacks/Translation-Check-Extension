@@ -2,7 +2,7 @@ import { loadNew, sleep, page } from './harness.mjs';
 let pass = 0, fail = 0;
 const t = (name, cond, extra = '') => { if (cond) pass++; else fail++; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : '  ' + extra}`); };
 const scan = (h, o = {}) => h.call({ type: 'scan', lang: 'es', attrs: true, unsure: true, mode: 'balanced', source: false, live: false, ...o });
-const hasMark = (w, kind) => [...w.CSS.highlights._m.keys()].some((k) => new RegExp(`^tc-[a-z0-9]{6}-${kind}$`).test(k)); // this copy's own marks
+const hasMark = (w, kind) => [...w.CSS.highlights._m.keys()].some((k) => new RegExp(`^tc2-[a-z0-9]{6}-${kind}$`).test(k)); // this copy's own marks
 const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que necesitas para tu hogar y tu familia.</p><p>Envío gratis en todos los pedidos superiores a cincuenta euros.</p>`;
 
 // 1. Broken text -------------------------------------------------------------
@@ -25,9 +25,9 @@ const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que nece
   sr.innerHTML = `<p>Our best sellers are shipping this week with free delivery.</p><button>Add to cart</button><p>Todos los derechos reservados por la empresa.</p>`;
   const r = await scan(h);
   t('shadow DOM: English text inside shadow root flagged', r.issues.filter((i) => i.verdict === 'bad').length === 2, JSON.stringify(r.issues.map((i) => i.text)));
-  t('shadow DOM: style injected into shadow root', !!sr.querySelector('style[data-tc-style]'));
+  t('shadow DOM: style injected into shadow root', !!sr.querySelector('style[data-tc2-style]'));
   await h.call({ type: 'clear' });
-  t('shadow DOM: clear removes injected style', !sr.querySelector('style[data-tc-style]'));
+  t('shadow DOM: clear removes injected style', !sr.querySelector('style[data-tc2-style]'));
 }
 // 3. Same-origin iframe ----------------------------------------------------------
 {
@@ -96,7 +96,7 @@ const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que nece
   await h.call({ type: 'clear' });
   t('clear: highlights removed', h.w.CSS.highlights._m.size === 0);
   t('clear: badge reset', h.bgCalls.badges.at(-1) === 0);
-  t('clear: no stray attributes', !h.w.document.querySelector('[data-tc-flag]'));
+  t('clear: no stray attributes', !h.w.document.querySelector('[data-tc-flag],[data-tc2-flag]'));
 }
 // 8. Format hints ----------------------------------------------------------------
 {
@@ -209,8 +209,8 @@ const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que nece
     const res = await scan(h);
     const keys = [...h.w.CSS.highlights._m.keys()];
     t('stale marks: an earlier copy of this version is removed while the current marks stay', res.issues.some((i) => i.verdict === 'bad') && hasMark(h.w, 'bad') && !keys.includes('tc-a1b2c3-bad')
-      && d.querySelectorAll('style[data-tc-style]').length === 1 && !d.querySelector('[data-tc-flag="a1b2c3:bad"]'), JSON.stringify(keys));
-    const own = d.querySelector('style[data-tc-style]').getAttribute('data-tc-style');
+      && !d.querySelector('style[data-tc-style]') && d.querySelectorAll('style[data-tc2-style]').length === 1 && !d.querySelector('[data-tc-flag="a1b2c3:bad"]'), JSON.stringify(keys));
+    const own = d.querySelector('style[data-tc2-style]').getAttribute('data-tc2-style');
     t('stale marks: this check\'s highlights are styled by its own style sheet', keys.some((k) => k.startsWith(own + '-bad')), own + ' ' + JSON.stringify(keys));
   }
 }

@@ -6,6 +6,7 @@ import { detectBug, formatHints } from './rules.js';
 import { describe, contextLine } from './context.js';
 import { matcher } from './learn.js';
 import { layoutProblem, describeProblem, stretchTest } from './layout.js';
+import { nonLatinTarget, latinOnly } from './scripts.js';
 
 (() => {
   if (window.__tcLoaded) return;
@@ -17,11 +18,15 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
   const NO_TRANSLATE = '[translate="no"],.notranslate,[contenteditable=""],[contenteditable="true"]';
   const URLISH = /^(https?:\/\/|www\.)\S+$|^\S+@\S+\.\S+$/i;
   const MAX_ITEMS = 6000;
+  const ACCOUNT = /(admin|user|employee|manager|staff|test|demo|dev|support|team|bot|guest|owner|member|agent|trainer|trainee)/;
   // Every copy of this script marks the page under its own private names. A copy from before an extension update keeps running in tabs that
   // were not reloaded and its marks outlive it, so they must never share names with the current check (see purgeForeign).
-  const NS = 'tc-' + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+  // 2.0.6 marks under "tc2-" names and data-tc2-* attributes. Older copies sweep away every mark named "tc-…" that isn't theirs on each live
+  // update; under the old names a stale copy in a tab that wasn't reloaded erased this check's highlights as soon as the page changed.
+  const NS = 'tc2-' + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+  const A_STYLE = 'data-tc2-style', A_FLAG = 'data-tc2-flag', A_FOCUS = 'data-tc2-focus';
   const K = { bad: NS + '-bad', unsure: NS + '-unsure', bug: NS + '-bug', fmt: NS + '-fmt', spell: NS + '-spell', layout: NS + '-layout', focus: NS + '-focus' };
-  const MARK_KEY = /^tc-(?:[a-z0-9]{6}-)?(?:bad|unsure|bug|fmt|spell|layout|focus)$/; // names any version of this extension has used
+  const MARK_KEY = /^tc2?-(?:[a-z0-9]{6}-)?(?:bad|unsure|bug|fmt|spell|layout|focus)$/; // names any version of this extension has used
   const RANK = { fmt: 1, spell: 1, layout: 1, unsure: 2, bad: 3, bug: 4 };
   // Hints that never change whether text counts as translated: listed in their own tabs, not in the score or the toolbar badge.
   const HINTS = new Set(['fmt', 'spell', 'layout']);
@@ -245,11 +250,23 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
     const todo = items.filter((it) => !it.base);
     await ensureCtx(items);
     await classifyTexts(todo.map((it) => it.j));
+    // On a page written in another script (Hindi, Arabic, Russian…), Latin-letter text can never be in the page's language, whatever surrounds it.
+    const otherScript = nonLatinTarget(state.p.lang);
     for (const it of todo) { // pass 1
       let v = vcache.get(ck(it.j));
+      it.wrongScript = otherScript && latinOnly(it.j);
       // Short capitalised phrases are often product/person names: weak evidence isn't enough to flag them
       // (unless every word is plain interface vocabulary, like "Order History": that is a label, not a name).
-      if (it.nameLike && v.v === 'bad' && !v.label && v.reason !== 'Looks like English text') v = { v: 'unsure' };
+      if (it.nameLike && v.v === 'bad' && !v.label && v.reason !== 'Looks like English text') {
+        // in the wrong script it stays listed (as a possible name or title, with the votes), never silently counted as translated
+        v = it.wrongScript ? { v: 'unsure', reason: 'Name or title? Latin letters on a page in another script', votes: v.votes, detected: v.detected } : { v: 'unsure' };
+      }
+      // a lowercase account ID ("jeffemployee", "vasu.k", "user_42"): data rather than text to translate. It needs an ID's tell (digits or
+      // separators, an account word, or a length no ordinary word has), so a foreign word such as "ahora" or "cancelar" is still listed.
+      if (it.wrongScript && v.v === 'unsure' && !v.enVocab && /^[a-z][a-z0-9._-]{4,}$/.test(it.j) && (/[0-9._-]/.test(it.j) || ACCOUNT.test(it.j) || it.j.length >= 13)) {
+        v = { v: 'name', reason: 'Looks like a user name or ID', kind: 'id' };
+      }
+      if (it.wrongScript && v.v === 'unsure' && !v.reason) v = { ...v, reason: 'Name or title? Latin letters on a page in another script' };
       it.base = v;
     }
     // pass 2: fragments we couldn't judge inherit the verdict of the sentence they sit in
@@ -261,12 +278,13 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
       if (c && c.length > it.j.length + 3) ctxFor.set(it, c);
     }
     await classifyTexts([...ctxFor.values()]);
-    for (const [it, c] of ctxFor) { const vc = vcache.get(ck(c)); if (vc.v !== 'unsure') it.base = { ...vc, via: 'context' }; }
+    // (a sentence may flag Latin letters on a page in another script, but never clear them)
+    for (const [it, c] of ctxFor) { const vc = vcache.get(ck(c)); if (vc.v !== 'unsure' && !(it.wrongScript && vc.v !== 'bad')) it.base = { ...vc, via: 'context' }; }
     // pass 2b: a lone word or label still unclear ("Empathie" alone in a card) is read with its section. If the section around it is clearly in
     // the page's language, the label is too, unless it is plain English on a non-English page or two models read it as another language.
     const secFor = new Map();
     for (const it of todo) {
-      if (it.base.v !== 'unsure' || it.base.enVocab || it.base.via) continue;
+      if (it.base.v !== 'unsure' || it.base.enVocab || it.base.via || it.wrongScript) continue;
       const v = it.base.votes, other = v ? ['cld3', 'franc', 'tinyld'].filter((k) => v[k] === 'other').length : 0;
       if (other >= 2) continue;
       const raw = it.kind === 'attr' ? sectionFor(it.el, null) : sectionFor(it.node.parentElement, it.node);
@@ -332,7 +350,8 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
       for (const it of state.items) if (it.base.v === 'bad' && it.base.votes && !it.base.confirmed) it.base = { v: 'unsure', reason: 'Not confirmed by a second model', votes: it.base.votes };
     }
     for (const it of state.items) {
-      if (it.base.v === 'unsure' && assume) { it.v = { v: 'ok', assumed: true }; state.assumedN++; } else it.v = it.base;
+      // (Latin letters on a page in another script are never assumed translated)
+      if (it.base.v === 'unsure' && assume && !it.wrongScript) { it.v = { v: 'ok', assumed: true }; state.assumedN++; } else it.v = it.base;
     }
   }
 
@@ -344,22 +363,22 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
     if (styled.has(rootNode)) return;
     const doc = rootNode.nodeType === 9 ? rootNode : rootNode.ownerDocument;
     const s = doc.createElement('style');
-    s.setAttribute('data-tc-style', NS);
+    s.setAttribute(A_STYLE, NS);
     s.textContent = `
-      ::highlight(${K.bad}){background-color:rgba(255,214,0,.7);color:#111;text-decoration:underline wavy #d7263d}
+      ::highlight(${K.bad}){background-color:#ffd600;color:#111;text-decoration:underline wavy #d7263d}
       ::highlight(${K.unsure}){background-color:rgba(80,140,255,.28);text-decoration:underline dotted #3b6df0}
       ::highlight(${K.bug}){background-color:rgba(190,60,255,.45);color:#111;text-decoration:underline wavy #7a1fa2}
       ::highlight(${K.fmt}){text-decoration:underline dotted #0f9d8a}
       ::highlight(${K.spell}){text-decoration:underline wavy #e07a00}
       ::highlight(${K.layout}){background-color:rgba(255,140,0,.18);text-decoration:underline dashed #e07a00}
       ::highlight(${K.focus}){background-color:#d7263d;color:#fff}
-      [data-tc-flag="${NS}:bad"]{outline:2px dashed #d7263d!important;outline-offset:2px!important}
-      [data-tc-flag="${NS}:unsure"]{outline:2px dotted #3b6df0!important;outline-offset:2px!important}
-      [data-tc-flag="${NS}:bug"]{outline:2px dashed #7a1fa2!important;outline-offset:2px!important}
-      [data-tc-flag="${NS}:fmt"]{outline:2px dotted #0f9d8a!important;outline-offset:2px!important}
-      [data-tc-flag="${NS}:spell"]{outline:2px dotted #e07a00!important;outline-offset:2px!important}
-      [data-tc-flag="${NS}:layout"]{outline:2px dashed #e07a00!important;outline-offset:2px!important}
-      [data-tc-focus="${NS}"]{box-shadow:0 0 0 4px rgba(215,38,61,.5)!important}`;
+      [${A_FLAG}="${NS}:bad"]{outline:2px dashed #d7263d!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:unsure"]{outline:2px dotted #3b6df0!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:bug"]{outline:2px dashed #7a1fa2!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:fmt"]{outline:2px dotted #0f9d8a!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:spell"]{outline:2px dotted #e07a00!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:layout"]{outline:2px dashed #e07a00!important;outline-offset:2px!important}
+      [${A_FOCUS}="${NS}"]{box-shadow:0 0 0 4px rgba(215,38,61,.5)!important}`;
     (rootNode.nodeType === 9 ? rootNode.head || rootNode.documentElement : rootNode).appendChild(s);
     styled.set(rootNode, s);
   }
@@ -377,7 +396,7 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
   function resetMarks() {
     for (const win of marks.keys()) { try { Object.values(K).forEach((k) => win.CSS.highlights.delete(k)); } catch (e) { /* frame gone */ } }
     marks.clear();
-    for (const root of state ? state.scope.roots : []) root.querySelectorAll?.(`[data-tc-flag^="${NS}:"]`).forEach((el) => el.removeAttribute('data-tc-flag'));
+    for (const root of state ? state.scope.roots : []) root.querySelectorAll?.(`[${A_FLAG}^="${NS}:"]`).forEach((el) => el.removeAttribute(A_FLAG));
   }
 
   // Removes whatever an older copy of this script left on the page: its highlights, its style sheet and its outlines. That copy keeps running in
@@ -394,10 +413,12 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
       try { const reg = w.CSS.highlights; for (const k of [...reg.keys()]) if (MARK_KEY.test(k) && !k.startsWith(NS + '-')) reg.delete(k); } catch (e) { /* frame gone */ }
     }
     for (const d of docs) {
-      d.querySelectorAll?.('style#tc-style,style[data-tc-style],[data-tc-flag],[data-tc-focus]').forEach((el) => {
-        if (el.localName === 'style') { if (el.getAttribute('data-tc-style') !== NS) el.remove(); return; }
-        if (!(el.getAttribute('data-tc-flag') || '').startsWith(NS + ':')) el.removeAttribute('data-tc-flag');
-        if (el.getAttribute('data-tc-focus') !== NS) el.removeAttribute('data-tc-focus');
+      // older versions' names (always someone else's) and this version's names when another copy left them
+      d.querySelectorAll?.(`style#tc-style,style[data-tc-style],[data-tc-flag],[data-tc-focus],style[${A_STYLE}],[${A_FLAG}],[${A_FOCUS}]`).forEach((el) => {
+        if (el.localName === 'style') { if (el.getAttribute(A_STYLE) !== NS) el.remove(); return; }
+        el.removeAttribute('data-tc-flag'); el.removeAttribute('data-tc-focus');
+        if (el.hasAttribute(A_FLAG) && !el.getAttribute(A_FLAG).startsWith(NS + ':')) el.removeAttribute(A_FLAG);
+        if (el.hasAttribute(A_FOCUS) && el.getAttribute(A_FOCUS) !== NS) el.removeAttribute(A_FOCUS);
       });
     }
   }
@@ -422,8 +443,8 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
         const m = marksFor(winOf(n));
         if (verdict === 'unsure') { if (p.unsure) m.unsure.add(r); } else m[verdict].add(r);
       } else if (verdict !== 'unsure' || p.unsure) {
-        const cur = (n.getAttribute('data-tc-flag') || '').replace(NS + ':', '');
-        if (!RANK[cur] || RANK[verdict] > RANK[cur]) n.setAttribute('data-tc-flag', NS + ':' + verdict);
+        const cur = (n.getAttribute(A_FLAG) || '').replace(NS + ':', '');
+        if (!RANK[cur] || RANK[verdict] > RANK[cur]) n.setAttribute(A_FLAG, NS + ':' + verdict);
       }
       const hint = HINTS.has(verdict);
       issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: hint ? undefined : it.v?.votes, confirmed: !hint && !!it.v?.confirmed, reason: reason && it.v?.via === 'context' && !hint ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length, ...extra });
@@ -516,7 +537,7 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
     if (!focused) return;
     clearTimeout(focused.timer);
     try { focused.win.CSS.highlights.delete(K.focus); } catch (e) { /* frame gone */ }
-    focused.el?.removeAttribute('data-tc-focus');
+    focused.el?.removeAttribute(A_FOCUS);
     focused = null;
   }
   function focusIssue(id) {
@@ -538,7 +559,7 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
       win.CSS.highlights.set(K.focus, h);
     } else if (el) {
       ensureStyle(el.getRootNode());
-      el.setAttribute('data-tc-focus', NS);
+      el.setAttribute(A_FOCUS, NS);
       focused.el = el;
     }
     focused.timer = setTimeout(unfocus, 6000);
@@ -578,11 +599,12 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
     if (observed.has(root)) return;
     observed.add(root);
     const mo = new MutationObserver((records) => {
+      if (orphaned()) return retire();
       if (state?.stretching) return; // the stretch test's own temporary changes (already undone)
       for (const r of records) {
         if (r.type === 'characterData') { const e = r.target.parentElement || r.target.parentNode?.host; if (e) dirty.add(e); }
         else {
-          for (const n of r.addedNodes) { if (n.nodeType === 1 && !n.hasAttribute('data-tc-style')) dirty.add(n); else if (n.nodeType === 3) dirty.add(r.target); }
+          for (const n of r.addedNodes) { if (n.nodeType === 1 && !n.hasAttribute(A_STYLE)) dirty.add(n); else if (n.nodeType === 3) dirty.add(r.target); }
           if (r.removedNodes.length) dirty.add(null); // forces a re-render so highlights on removed text disappear
         }
       }
@@ -593,8 +615,18 @@ import { layoutProblem, describeProblem, stretchTest } from './layout.js';
     observers.push(mo);
   }
 
+  // After the extension is reloaded or updated, this copy keeps running in the tab but can no longer reach the extension. It then stops for
+  // good: no more live re-checks and no more sweeping, so it can never touch the marks of the copy that replaced it.
+  const BORN_AS = (() => { try { return api.runtime?.id; } catch (e) { return undefined; } })();
+  const orphaned = () => { if (!BORN_AS) return false; try { return !api.runtime?.id; } catch (e) { return true; } }; // had an extension, lost it
+  function retire() {
+    clearTimeout(timer); dirty.clear();
+    observers.forEach((o) => o.disconnect()); observers = [];
+    state = null;
+  }
   async function refresh() {
     if (!state) return;
+    if (orphaned()) return retire();
     if (busy) { again = true; return; }
     busy = true;
     const my = seq;

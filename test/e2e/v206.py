@@ -167,6 +167,35 @@ with sync_playwright() as p:
     t('nav: coming back to a group resumes where you left it', 'Copy 3 of 8' in pop.inner_text(f'#list li:nth-child({i + 1})'), pop.inner_text(f'#list li:nth-child({i + 1})'))
     pop.screenshot(path=str(SHOTS/'v206-hi-popup.png'))
     pop.evaluate("() => { const c = document.querySelector('#confirmed'); c.checked = false; c.dispatchEvent(new Event('change')); }")
+
+    # ---- reported: a copy of the previous version left in the tab (extension reloaded, tab not) erased every new highlight on each live update.
+    # This plants exactly what 2.0.5's live mode does on every page change (sweep "tc-…" marks and style sheets that are not its own).
+    OLD_SWEEP = """(() => { const MINE = 'tc-zz9zz9'; const KEY = /^tc-(?:[a-z0-9]{6}-)?(?:bad|unsure|bug|fmt|focus)$/;
+      new MutationObserver(() => { for (const k of [...CSS.highlights.keys()]) if (KEY.test(k) && !k.startsWith(MINE + '-')) CSS.highlights.delete(k);
+        document.querySelectorAll('style#tc-style,style[data-tc-style],[data-tc-flag],[data-tc-focus]').forEach((el) => { if (el.localName === 'style') { if (el.getAttribute('data-tc-style') !== MINE) el.remove(); return; }
+          if (!(el.getAttribute('data-tc-flag') || '').startsWith(MINE + ':')) el.removeAttribute('data-tc-flag'); }); }).observe(document.body, { childList: true, subtree: true, characterData: true }); })()"""
+    S = B + '/hi-sessions.html'
+    pg.goto(S); pg.evaluate(OLD_SWEEP); pg.bring_to_front()
+    pop.evaluate("u => { window.__T = u; }", S); set_lang(pop, 'hi'); pop.click('#tabBad'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
+    pg.bring_to_front(); time.sleep(0.3)
+    pg.evaluate("() => { const p = document.createElement('p'); p.textContent = 'नया अपडेट'; document.querySelector('main').append(p); }")  # live data arrives
+    time.sleep(2.5)
+    def gold(text):  # the untranslated highlight (solid yellow) under a title, from a real screenshot
+        from PIL import Image; import io
+        box = pg.evaluate("t => { const e = [...document.querySelectorAll('.title,.st')].find(x => x.textContent.trim() === t); e.scrollIntoView({block: 'center'}); const r = e.getBoundingClientRect(); return {x: r.x, y: r.y, width: r.width, height: r.height}; }", text)
+        time.sleep(0.2); im = Image.open(io.BytesIO(pg.screenshot(clip=box))).convert('RGB')
+        px = list(im.get_flattened_data()) if hasattr(im, 'get_flattened_data') else list(im.getdata())
+        return sum(1 for (r, g, b) in px if r >= 235 and 195 <= g <= 230 and b <= 60)
+    hl = {t: gold(t) for t in ['Payment Platform Migration', 'Review Pending']}
+    t('stale copy: highlights survive an older copy sweeping marks on a live page update', all(v > 150 for v in hl.values()), hl)
+    pg.screenshot(path=str(SHOTS/'v206-stale-copy.png'))
+    sn = snippets(pop)
+    t('hindi table: plain English titles are untranslated; "Review Pending" is labelled English', 'Payment Platform Migration' in sn and 'English' in next(r for r in rows(pop) if r.startswith('Review Pending')), rows(pop))
+    pop.click('#tabUnsure'); time.sleep(0.2); un = snippets(pop)
+    t('hindi table: titles that may be names are listed as unclear, not counted as translated', all(x in un for x in ['Wisight Mapping', 'Inventory Management', 'Wisight Development', 'Trucost']), un)
+    t('hindi table: user IDs are not listed (counted as names)', not any(x in un + sn for x in ['jeffemployee', 'vasuemployee', 'jeffadmin']), un + sn)
+    tips = pop.eval_on_selector_all('#list li > button:first-child', 'els => els.map(e => e.title)')
+    t('tooltips are short (the reason only, no surrounding text)', all('\n' not in x and len(x) < 90 for x in tips), tips)
     t('no script errors on the page or in the popup', not errors, errors)
     pg.goto(URL); time.sleep(0.3)
     ctx.close()

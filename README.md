@@ -30,6 +30,10 @@ On a Hindi, Arabic, Russian, Japanese or Chinese page (any page whose language i
 that are all English dictionary words ("technical • impatient", "casual • calm") are untranslated English: two hard facts, the script and the
 dictionary, so the models' scattered guesses on two words don't matter. Names and brands are left alone (a phrase where every word is
 capitalised only counts when it is plain interface wording such as "Settings").
+Other Latin-letter text on such a page (a session title such as "Wisight Mapping", a product name) is listed as *unclear* ("Name or title?")
+and is never counted as translated because of the text around it or because the rest of the page is translated. Lowercase account IDs
+("jeffadmin", "vasu.k") are counted as names. Text flagged for its English wording keeps the English label even when two models guess
+another language, unless every word is also a word of that language ("Service client" stays French).
 A warning that rests on hard evidence like this is **confirmed** when no model reads the target language and two read some other language,
 even if they name different ones, so *Confirmed warnings only* no longer moves it to Unclear.
 
@@ -112,6 +116,8 @@ The choice is saved first and the background worker finishes the setup, so it al
 ## After updating the extension
 Chrome keeps the previous version's page script running in tabs that were already open, and its highlights stay on the page. Every check
 (and *Clear*) now removes marks left by older copies, so the page only shows what the current check found. Reloading the tab is still the cleanest start.
+2.0.6 marks the page under new names (`tc2-…`, `data-tc2-*`): a 2.0.5 copy still running in a tab used to sweep away the new highlights on
+every live update. From 2.0.6 on, a copy whose extension was reloaded stops by itself.
 
 ## PDFs
 Open a PDF in the browser and click the toolbar icon → **Check PDF**. The file is downloaded by the extension, read with pdf.js and checked

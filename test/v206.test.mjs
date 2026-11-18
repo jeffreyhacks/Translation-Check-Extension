@@ -1,6 +1,7 @@
 // 2.0.6: grouped strings with their locations, context capture, learned ignore rules, spelling/spacing hints, layout check and stretch test.
 // jsdom has no layout engine, so layout is measured here with stubbed boxes; test/e2e/layout.py checks it in real Chrome.
 import { loadNew, loadBg, page, sleep } from './harness.mjs';
+import fs from 'fs';
 import { mask } from '../src/mask.js';
 import { JSDOM } from 'jsdom';
 import * as learn from '../src/learn.js';
@@ -191,6 +192,32 @@ const SHOP = page(`
   t('focus: an earlier click\'s timer does not wipe the newest mark', !!focusKey());
   await sleep(4000);
   t('focus: the mark goes away by itself after a few seconds', !focusKey());
+}
+
+// ---------- a copy whose extension was reloaded stops for good (it can no longer touch the new copy's marks) ----------
+{
+  const html = page('<main><p>Texto traducido al español para la prueba de copias antiguas.</p><p id="x">Guardar cambios</p></main>', 'es');
+  const h = loadNew(html, { extra: (w) => { w.chrome.runtime.id = 'ext-1'; } }); // a real content script starts with its extension's id
+  await scan(h, { live: true });
+  h.w.chrome.runtime.id = undefined; // extension reloaded: this copy is orphaned
+  const p = h.w.document.createElement('p'); p.textContent = 'Add to cart now'; h.w.document.querySelector('main').append(p);
+  await sleep(1200);
+  t('orphaned copy: no more live re-checks after the extension was reloaded', h.bgCalls.results === 0, String(h.bgCalls.results));
+}
+
+// ---------- reported: Hindi sessions table: titles missing from both lists, "Review Pending" labelled Indonesian, IDs cluttering ----------
+{
+  const r = await scan(loadNew(fs.readFileSync('test/e2e/site/hi-sessions.html', 'utf8')), { lang: 'hi' });
+  const by = (x) => r.issues.find((i) => i.text === x);
+  t('hi table: "Review Pending" is labelled English (its wording), not Indonesian', by('Review Pending')?.detected === 'en', JSON.stringify(by('Review Pending')));
+  t('hi table: titles that may be names are listed as unclear, with a reason', ['Wisight Mapping', 'Inventory Management', 'Wisight Development', 'Trucost'].every((x) => by(x)?.verdict === 'unsure' && /Name or title/.test(by(x).reason)), JSON.stringify(r.issues.map((i) => [i.verdict, i.text])));
+  t('hi table: plain English stays untranslated', by('Payment Platform Migration')?.verdict === 'bad' && by('AI/ML Engineer Knowledge Capture – Document Test')?.count === 2);
+  t('hi table: Latin text is never "assumed translated" on a page in another script', r.stats.assumedN === 0, JSON.stringify(r.stats));
+  t('hi table: account IDs are counted as names, not listed', !r.issues.some((i) => /employee|jeffadmin/.test(i.text) && i.verdict !== 'bad') && r.stats.nameN >= 5, JSON.stringify(r.stats));
+  const w = await scan(loadNew(page('<main><p>यहाँ आपके सभी प्रशिक्षण सत्र और उनकी स्थिति दिखाई देती है।</p><p>ahora</p><p>cancelar</p><p>jeffadmin</p></main>', 'hi')), { lang: 'hi' });
+  t('hi page: foreign words ("ahora", "cancelar") are still listed; only real IDs count as names', ['ahora', 'cancelar'].every((x) => w.issues.some((i) => i.text === x)) && !w.issues.some((i) => i.text === 'jeffadmin'), JSON.stringify(w.issues.map((i) => i.text)));
+  const es = await scan(loadNew(page('<main><p>Texto traducido al español para la prueba.</p><p>Inventory Management</p></main>', 'es')), { lang: 'es' });
+  t('latin pages unchanged: a capitalised English title on a Spanish page is handled as before', JSON.stringify(es.stats).length > 0 && !es.issues.some((i) => /Name or title/.test(i.reason || '')));
 }
 
 console.log(`\n2.0.6 features: ${pass} passed, ${fail} failed`);

@@ -177,7 +177,6 @@ function render() {
     b.append(meta);
     if (i.reason) b.append(el('span', 'why', i.reason));
     b.title = i.reason || 'Too short or ambiguous to judge';
-    if (o && (o.before || o.after)) b.title = `${b.title}\n\n${o.before} ⟦${i.text}⟧ ${o.after}`.trim();
     // a click on the selected row moves on to the next place the same text appears; coming back to a row resumes where you left it
     b.addEventListener('click', () => {
       if (cursor === idx && occ.length > 1) occAt.set(i.id, (at + 1) % occ.length);

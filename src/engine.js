@@ -8,12 +8,8 @@ export { EN_SINGLE, EN_FN, EN_WEAK };
 
 const TINY = new Set(supportedLanguages.map(toISO2));
 
-export const TARGET_SCRIPTS = {
-  ru: ['cyrillic'], uk: ['cyrillic'], bg: ['cyrillic'],
-  ar: ['arabic'], fa: ['arabic'], ur: ['arabic'], he: ['hebrew'],
-  hi: ['devanagari'], bn: ['bengali'], ta: ['tamil'], te: ['telugu'],
-  th: ['thai'], el: ['greek'], ja: ['han', 'kana'], zh: ['han'], ko: ['hangul'],
-};
+import { TARGET_SCRIPTS } from './scripts.js';
+export { TARGET_SCRIPTS };
 const SAME_SCRIPT = [['ru', 'uk', 'bg', 'be', 'sr'], ['ar', 'fa', 'ur'], ['hi', 'mr']];
 const SCRIPT_RE = {
   latin: /\p{Script=Latin}/gu, cyrillic: /\p{Script=Cyrillic}/gu, arabic: /\p{Script=Arabic}/gu,

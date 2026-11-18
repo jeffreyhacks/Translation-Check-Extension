@@ -62,7 +62,7 @@ with sync_playwright() as p:
     reg = sw.evaluate("async () => (await chrome.scripting.getRegisteredContentScripts()).map(s => ({id: s.id, matches: s.matches, persist: s.persistAcrossSessions}))")
     t('switch on: the background worker registered the page script for this site', any(r['id'] == 'auto-127.0.0.1' and r['persist'] for r in reg), reg)
     de = ctx.new_page(); de.goto(B + '/de.html'); de.bring_to_front(); time.sleep(5)
-    marks = de.evaluate("[...CSS.highlights.keys()].filter(k => /^tc-[a-z0-9]{6}-(bad|unsure|bug)$/.test(k)).length")
+    marks = de.evaluate("[...CSS.highlights.keys()].filter(k => /^tc2-[a-z0-9]{6}-(bad|unsure|bug)$/.test(k)).length")
     t('a page opened later is checked automatically, with no click on the toolbar', marks >= 1, marks)
     pop.bring_to_front(); pop.click('label.opt:has(#auto) i'); time.sleep(2)
     reg2 = sw.evaluate("async () => (await chrome.scripting.getRegisteredContentScripts()).map(s => s.id)")

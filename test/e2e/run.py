@@ -73,13 +73,13 @@ with sync_playwright() as p:
     pop.click('#tabBug'); br = rows(pop)
     t('e2e: the leaked translation key is under "Broken"', any('checkout.button.save' in x for x in br), br)
     pop.click('#tabBad')
-    hl = de.evaluate("['bad','bug'].map(s => [...CSS.highlights.keys()].some(k => new RegExp('^tc-[a-z0-9]{6}-' + s + '$').test(k))).join()")
+    hl = de.evaluate("['bad','bug'].map(s => [...CSS.highlights.keys()].some(k => new RegExp('^tc2-[a-z0-9]{6}-' + s + '$').test(k))).join()")
     t('e2e: real CSS highlights are registered on the page', hl.startswith('true,true'), hl)
     pop.screenshot(path=str(SHOTS) + '/popup-de-ok.png')
     de.screenshot(path=str(SHOTS) + '/page-de-highlights.png')
     # navigate with next, check page reacts
     pop.click('#next'); time.sleep(0.5)
-    t('e2e: "next" focuses an issue on the page (focus highlight)', de.evaluate("[...CSS.highlights.keys()].some(k => /^tc-[a-z0-9]{6}-focus$/.test(k))"))
+    t('e2e: "next" focuses an issue on the page (focus highlight)', de.evaluate("[...CSS.highlights.keys()].some(k => /^tc2-[a-z0-9]{6}-focus$/.test(k))"))
     # ---------- 2. wrong target -> banner ----------
     set_lang(pop, 'en'); run(pop)
     t('e2e: wrong target (English on a German page) shows the short banner', pop.is_visible('#mismatch') and 'German' in pop.inner_text('#mismatchText'), pop.inner_text('#result')[:200])

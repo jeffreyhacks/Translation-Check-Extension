@@ -11,6 +11,8 @@ const shared = {};
 const en = () => (EN ||= new Set(EN_WORDS.split(' ')));
 const sharedWith = (lang) => (lang in SHARED ? (shared[lang] ||= new Set(SHARED[lang].split(' '))) : null);
 export const hasWordList = (lang) => lang in SHARED;
+/** Every word of the text is also a word of `lang` (from its word list); false when there is no list for `lang`. */
+export const sharedEntirely = (text, lang) => { const set = sharedWith(lang); const w = text.toLowerCase().match(/\p{L}+/gu) || []; return !!set && w.length > 0 && w.every((x) => set.has(x)); };
 
 // International words that are normal on pages in any language: neither English nor the target.
 const NEUTRAL = new Set(('home menu email online blog login logout newsletter password app apps wifi news shop team video audio info download upload chat status ' +
