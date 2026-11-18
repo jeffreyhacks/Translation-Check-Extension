@@ -10,6 +10,19 @@ Load this folder in `chrome://extensions` (Developer mode → Load unpacked). Ne
    warning (or clear an *unclear*); two that name the same other language raise one (or confirm it). A confident dissent from the third model,
    clearly English wording, or a rule-based reason overrides the agreement. Each warning shows three dots (one per model) and a ✓ when 2+ agree.
    Settings → *Confirmed only* shows nothing that a second model doesn't back.
+   **Models are made to vote.** Neighbouring languages count as one answer (CLD3's "Norwegian" agrees with tinyld's "Danish"), and the label is
+   the page's own language. A model that abstains, or names a third language unrelated to both (Welsh or Mongolian for one Danish word), is asked
+   again head-to-head: *target or the page's own language?* That answer is weak, so it only backs up the dictionary, never replaces it, and two
+   head-to-head answers alone never count as agreement. franc's open vote uses franc-min; the head-to-head uses full franc, which knows Danish,
+   Norwegian, Finnish and Slovak.
+   **English checks use the dictionary as evidence.** A word that isn't English, not even as a plural, ending, prefix or compound ("integrations",
+   "reskilling", "roleplay", "datetime"), is untranslated when two models (or one confident model) name the page's own language, even a
+   single word ("Hjem", "Træning"). Text whose words are all English that way is translated unless two models agree on another language.
+   Danish/Norwegian/Swedish plurals in *-er* ("Personaer", "Rapporter") are never read as English.
+   **Labels must fit the letters.** A language is dropped as a label when the text has letters it lacks, and also when 15+ letters of plain a-z
+   carry none of the marks it always uses: "Systeemconfiguratie" is not Czech, Polish or Hungarian. The text is then re-read among the common
+   Latin-script languages and keeps its warning only if that language (Dutch) really beats the target. Dutch *'s* plurals ("persona's") and
+   "help" are not English evidence on Dutch pages.
 3. Page-level logic: sentence context, source-language comparison (hreflang), and the "mostly translated" fallback for very short strings.
 
 ## Short words and look-alike languages
