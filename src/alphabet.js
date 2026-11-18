@@ -20,3 +20,16 @@ export function impossible(text, lang) {
   }
   return false;
 }
+
+// The reverse check: languages whose words almost all carry their own marks. 15+ letters of plain a-z is not Czech, Polish, Slovak, Hungarian...
+// (tinyld calls Dutch compounds such as "Systeemconfiguratie" Czech). Languages often written without marks (hr, sl, ro on old keyboards) are left out.
+const MARKED = { cs: /[áčďéěíňóřšťúůýž]/, sk: /[áäčďéíĺľňóôŕšťúýž]/, pl: /[ąćęłńóśźż]/, hu: /[áéíóöőúüű]/, tr: /[çğıöşü]/, lv: /[āčēģīķļņšūž]/, lt: /[ąčęėįšųūž]/,
+  is: /[áðéíóúýþæö]/, vi: /[àáảãạăằắẳẵặâầấẩẫậđèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵ]/ };
+/** @returns {boolean} true if `lang` cannot have produced `text`: letters it lacks, or a long text without any of the marks it always has */
+export function implausible(text, lang) {
+  if (impossible(text, lang)) return true;
+  const re = MARKED[lang];
+  if (!re) return false;
+  const t = text.normalize('NFC').toLowerCase();
+  return (t.match(/\p{L}/gu) || []).length >= 15 && !re.test(t);
+}

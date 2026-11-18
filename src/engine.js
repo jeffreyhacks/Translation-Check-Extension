@@ -2,7 +2,7 @@
 import { detectAll, supportedLanguages, toISO2 } from 'tinyld/heavy';
 import { EN_SINGLE, EN_FN, EN_WEAK } from './lexicon.js';
 import { stopHits, STOP } from './stopwords.js';
-import { impossible } from './alphabet.js';
+import { impossible, implausible } from './alphabet.js';
 import { looksEnglish, allEnglish } from './english.js';
 export { EN_SINGLE, EN_FN, EN_WEAK };
 
@@ -63,7 +63,11 @@ function decide(sT, sO, other) {
   return null;
 }
 
-function englishScore(words) {
+// "English-only" interface words that are ordinary words of some other languages too: never English evidence on those pages.
+const ALSO = { nl: new Set(['help', 'start', 'reset']), de: new Set(['start']), da: new Set(['start']), sv: new Set(['start']), no: new Set(['start']) };
+function englishScore(words, lang) {
+  const also = ALSO[lang];
+  if (also) words = words.filter((w) => !also.has(w));
   const nonN = words.filter((w) => !NEUTRAL.has(w));
   const strong = nonN.filter((w) => EN_FN.has(w)).length;
   // fully English = every word is English; cognates (EN_WEAK) are allowed only alongside at least one strong English word
@@ -75,7 +79,7 @@ function englishScore(words) {
 // How much of a text is clearly English wording, and how much of it is the target language's own function words.
 export function englishHits(text, lang) {
   const words = text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
-  const { strong } = englishScore(words);
+  const { strong } = englishScore(words, lang);
   return { strong, own: Math.max(...groupOf(lang).map((g) => stopHits(words, g))) };
 }
 /** Words of a short text on which the target language (or a relative) is still a real contender against `other`: a text made only of
@@ -96,6 +100,8 @@ export function targetCompetes(text, lang, other, related = true) {
 // is guessing, so its vote does not count.
 const LIKELY = new Set('en es fr de it pt nl sv da no fi pl cs sk hu ro bg hr el tr ru uk ar fa he ur hi bn ta te th vi id ms sw ja ko zh ca sr bs sl lt lv et is be mk sq hy ka eu gl af cy ga mt mr gu kn ml pa ne si km lo my mn az kk uz'.split(' '));
 export const plausible = (l) => LIKELY.has(l);
+// Latin-script languages most pages are written in: the shortlist to re-ask when a model's label can't be right ("Czech" for plain-ASCII Dutch).
+const LATIN_COMMON = 'en es fr de it pt nl sv da no fi pl cs sk hu ro hr sl tr id ms vi ca'.split(' ');
 
 // Name the language by function words when they clearly disagree with the model's guess (e.g. German reported as Hungarian).
 export function relabel(words, guess) {
@@ -129,7 +135,7 @@ export function createEngine(cld = async () => null) {
       if (top && top.accuracy >= 0.5) {
         const l = norm(top.lang);
         const words = t.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
-        const real = group.includes(l) || !confirmedOther(t, words, group, l) ? group[0] : l; // unconfirmed guesses count as the target
+        const real = group.includes(l) || implausible(t, l) || !confirmedOther(t, words, group, l) ? group[0] : l; // unconfirmed or letter-implausible guesses count as the target
         tally[real] = (tally[real] || 0) + t.length; total += t.length;
       }
     }
@@ -164,7 +170,7 @@ export function createEngine(cld = async () => null) {
     // English page: if every word is in the English dictionary, the text is English, whatever the models make of a few words
     if (lang === 'en' && allEnglish(text)) return OK;
     if (lang !== 'en') { // text made up entirely of English-only UI wording
-      const { nonN, fully } = englishScore(words);
+      const { nonN, fully } = englishScore(words, lang);
       if (fully && (nonN.length >= 2 || words.length >= 2 || EN_SINGLE.has(nonN[0]))) return bad('en', 'Looks like English text');
       // everyday English words that are not words of the target language ("Enthusiastic, decisive" on a French page)
       if (words.length <= 12 && looksEnglish(text, lang)) return bad('en', 'Looks like English text');
@@ -201,7 +207,7 @@ export function createEngine(cld = async () => null) {
     // Short text with clearly English wording and none of the target language's function words: trust the wording
     // over a weak statistical tie (e.g. French "Save changes" scores as a near-cognate of French).
     if (lang !== 'en' && words.length >= 2 && words.length <= 4) {
-      const { nonN, strong } = englishScore(words);
+      const { nonN, strong } = englishScore(words, lang);
       if (strong >= 1 && strong / nonN.length >= 0.5 && Math.max(...group.map((g) => stopHits(words, g))) === 0) return bad('en', 'Looks like English text');
     }
     const v = decide(sT, sO, other);
@@ -212,7 +218,7 @@ export function createEngine(cld = async () => null) {
     }
 
     if (lang !== 'en') { // ambiguous: lean on English wording if at least half the words are clearly English
-      const { nonN, strong } = englishScore(words);
+      const { nonN, strong } = englishScore(words, lang);
       if (strong >= 1 && strong / nonN.length >= 0.5 && nonN.length >= 2) return bad('en', 'Looks like English text');
     }
     if (nonLatinTarget && words.length >= 4) return bad('latin', 'Latin-script text on a non-Latin page');
@@ -233,7 +239,17 @@ export function createEngine(cld = async () => null) {
   // A claim of "this is language L" is dropped when the text has letters L doesn't have (English claims are exempt).
   async function classify(text, lang, ctx) {
     const v = await classifyRaw(text, lang, ctx);
-    if (v.v === 'bad' && v.detected && v.detected !== 'en' && impossible(text, norm(v.detected))) return { v: 'unsure', reason: 'Letters don’t fit the detected language' };
+    if (v.v === 'bad' && v.detected && v.detected !== 'en' && implausible(text, norm(v.detected))) {
+      // letters it lacks: drop the claim. Plain a-z with none of its marks ("Czech" for Dutch compounds): name the next plausible language instead,
+      // and keep the warning only if that language really beats the target head-to-head.
+      if (!impossible(text, norm(v.detected))) {
+        const group = groupOf(lang), words = text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
+        const pool = [...new Set([...group, ...LATIN_COMMON])].filter((l) => l !== norm(v.detected) && TINY.has(l) && !implausible(text, l));
+        const alt = detectAll(text, { only: pool }).map((r) => norm(r.lang)).find((l) => !group.includes(l) && !relatedOf(lang).includes(l) && plausible(l));
+        if (alt && confirmedOther(text, words, group, alt)) return { ...v, detected: relabel(words, alt) };
+      }
+      return { v: 'unsure', reason: 'Letters don’t fit the detected language' };
+    }
     return v;
   }
 

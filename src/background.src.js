@@ -32,7 +32,7 @@ async function classify({ lang, texts = [], ctxTexts = [], htmlLang, related, ct
       let v = await engine.classify(texts[k], lang, c);
       const kind = v.v !== 'ok' && !SCRIPT.test(v.reason || '') && knownName(texts[k]); // a person, place or brand: not something to translate
       if (kind) { verdicts[k] = { v: 'name', reason: 'Looks like a name', kind }; continue; }
-      if (verify !== false) v = await verifier.verify(texts[k], lang, v, c.related, { shape: !CAPITALISES.has(lang) && nameShape(texts[k]) });
+      if (verify !== false) v = await verifier.verify(texts[k], lang, v, c.related, { shape: !CAPITALISES.has(lang) && nameShape(texts[k]), sources: c.sources || [] });
       v = guardShort(texts[k], v, lang, c.related);
       // an unclear text made only of English words must not be cleared later by its section's verdict on a non-English page
       if (v.v === 'unsure' && lang !== 'en' && allEnglish(texts[k])) v = { ...v, enVocab: true };

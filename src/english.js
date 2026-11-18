@@ -35,6 +35,7 @@ export function englishWords(text, lang) {
   for (const raw of text.match(/\p{L}[\p{L}'’-]*/gu) || []) {
     const w = raw.toLowerCase();
     if (stop && stop.has(w)) { own++; continue; }
+    if (lang === 'nl' && /[a-z]['’]s$/.test(w)) { own++; continue; } // Dutch plural "persona's", "menu's", "scenario's" (English uses 's for possessives, rare in labels)
     if (w.length < 3 || NEUTRAL.has(w)) continue;
     if (/[^a-z'’-]/.test(w)) { own++; continue; } // accented or non-ASCII letters: not English wording
     const parts = w.split(/['’-]/).filter(Boolean);
@@ -56,6 +57,49 @@ export function allEnglish(text) {
     const parts = w.split(/['’-]/).filter(Boolean);
     if (stop.has(w) || NEUTRAL.has(w)) { real++; continue; }
     if (parts.every((p) => E.has(p) || EN_SHORT.has(p))) { if (w.length >= 3) real++; continue; }
+    return false;
+  }
+  return real > 0;
+}
+
+// (no -er/-ers: that is the Danish/Norwegian/Swedish plural, "Personaer", "Rapporter"; English -er words such as "trainer" are in the dictionary already)
+// English morphology for words the dictionary lists only in their base form: plurals and endings ("integrations", "personas", "coachable"),
+// prefixes ("reskilling", "upskilling") and closed compounds of two English words ("roleplay", "autosave", "datetime", "signout").
+const SUFFIXES = ['s', 'es', 'ing', 'ings', 'ed', 'able', 'ability', 'ly', 'ness', 'ment', 'ments', 'ful', 'less', 'ize', 'ized', 'ization', 'ise', 'ised'];
+const PREFIXES = ['re', 'un', 'up', 'pre', 'co', 'de', 'sub', 'non', 'self', 'auto', 'micro', 'multi', 'over', 'out', 'under', 'inter', 'mis', 'post'];
+function enBase(w, E) {
+  if (E.has(w)) return true;
+  for (const suf of SUFFIXES) {
+    if (w.length - suf.length < 3 || !w.endsWith(suf)) continue;
+    const b = w.slice(0, -suf.length);
+    if (E.has(b) || E.has(b + 'e') || (b.length >= 4 && b[b.length - 1] === b[b.length - 2] && E.has(b.slice(0, -1))) || (b.endsWith('i') && E.has(b.slice(0, -1) + 'y'))) return true;
+  }
+  return false;
+}
+const PARTICLES = new Set(['up', 'in', 'on', 'out', 'off']);
+function enWord(w, E) {
+  if (enBase(w, E)) return true;
+  for (const p of PREFIXES) if (w.length - p.length >= 4 && w.startsWith(p) && enBase(w.slice(p.length), E)) return true;
+  // two English words joined, each 4+ letters ("roleplay", "datetime"), or a word and a particle ("signup", "signout"). Shorter halves match
+  // too much Danish: "rap|porter" (Rapporter), "for|handling" (Forhandling).
+  for (let i = 4; i <= w.length - 2; i++) {
+    const a = w.slice(0, i), b = w.slice(i);
+    if (E.has(a) && (b.length >= 4 ? enBase(b, E) : PARTICLES.has(b))) return true;
+  }
+  return false;
+}
+/** Like allEnglish, but also accepts derived and compound English words and acronyms ("KPIs", "SSO", "CSAT"). Weaker evidence than allEnglish
+ *  (a Danish word can split into two English ones: "for|handling"), so it is only used where the models are also consulted. */
+export function englishLike(text) {
+  const E = en(), stop = STOP.en;
+  let real = 0;
+  for (const raw of text.match(/\p{L}[\p{L}'’-]*/gu) || []) {
+    if (/^[A-Z]{2,6}s?$/.test(raw)) continue; // acronym: no language
+    const w = raw.toLowerCase();
+    if (/[^a-z'’-]/.test(w)) return false;
+    const parts = w.split(/['’-]/).filter(Boolean);
+    if (stop.has(w) || NEUTRAL.has(w)) { real++; continue; }
+    if (parts.every((p) => EN_SHORT.has(p) || NEUTRAL.has(p) || enWord(p, E))) { if (w.length >= 3) real++; continue; }
     return false;
   }
   return real > 0;

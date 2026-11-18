@@ -23,6 +23,7 @@ function agreedPhrase(text, v, lang, related) {
 /** Downgrade a model-only warning on a short string to "can't tell" (unless it is a phrase the models agree on, see above). */
 export function guardShort(text, v, lang, related = true) {
   if (!v || v.v !== 'bad' || HARD.test(v.reason || '') || !isShort(text)) return v;
+  if (v.notEnglish) return v; // English check: not a word of English, and two models name the page's own language (see verify.js)
   const lower = (text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || []);
   if (lower.some((w) => w.length >= 3 && EN_FN.has(w))) return v; // contains an unmistakably English word ("save", "welcome", "cancel")
   if (lang && agreedPhrase(text, v, lang, related)) return v;
