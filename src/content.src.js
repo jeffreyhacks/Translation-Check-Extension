@@ -3,6 +3,9 @@
 // masks, highlights and reports.
 import { mask, compileTerms } from './mask.js';
 import { detectBug, formatHints } from './rules.js';
+import { describe, contextLine } from './context.js';
+import { matcher } from './learn.js';
+import { layoutProblem, describeProblem, stretchTest } from './layout.js';
 
 (() => {
   if (window.__tcLoaded) return;
@@ -17,9 +20,11 @@ import { detectBug, formatHints } from './rules.js';
   // Every copy of this script marks the page under its own private names. A copy from before an extension update keeps running in tabs that
   // were not reloaded and its marks outlive it, so they must never share names with the current check (see purgeForeign).
   const NS = 'tc-' + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
-  const K = { bad: NS + '-bad', unsure: NS + '-unsure', bug: NS + '-bug', fmt: NS + '-fmt', focus: NS + '-focus' };
-  const MARK_KEY = /^tc-(?:[a-z0-9]{6}-)?(?:bad|unsure|bug|fmt|focus)$/; // names any version of this extension has used
-  const RANK = { fmt: 1, unsure: 2, bad: 3, bug: 4 };
+  const K = { bad: NS + '-bad', unsure: NS + '-unsure', bug: NS + '-bug', fmt: NS + '-fmt', spell: NS + '-spell', layout: NS + '-layout', focus: NS + '-focus' };
+  const MARK_KEY = /^tc-(?:[a-z0-9]{6}-)?(?:bad|unsure|bug|fmt|spell|layout|focus)$/; // names any version of this extension has used
+  const RANK = { fmt: 1, spell: 1, layout: 1, unsure: 2, bad: 3, bug: 4 };
+  // Hints that never change whether text counts as translated: listed in their own tabs, not in the score or the toolbar badge.
+  const HINTS = new Set(['fmt', 'spell', 'layout']);
 
   const tick = () => new Promise((r) => setTimeout(r, 0));
   const clean = (s) => s.replace(/\s+/g, ' ').trim();
@@ -29,7 +34,8 @@ import { detectBug, formatHints } from './rules.js';
   const quiet = (m) => send(m).catch(() => {});
 
   let state = null, last = null, seq = 0, busy = false, again = false, timer = 0;
-  let visCache = new WeakMap(), blockCache = new WeakMap();
+  let visCache = new WeakMap(), blockCache = new WeakMap(), ctxCache = new WeakMap();
+  const spellCache = new Map();
   const vcache = new Map(), targets = new Map(), styled = new Map(), marks = new Map();
   let observers = [], observed = new WeakSet();
   const dirty = new Set();
@@ -101,6 +107,8 @@ import { detectBug, formatHints } from './rules.js';
     const keep = [];
     let ign = 0;
     for (const it of raw) {
+      // learned from earlier Ignore clicks (codes, versions, a page slot such as `span.user-name`): skipped like ignored terms
+      if (state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host)) { state.learnedN++; continue; }
       if (p.bugs) {
         const b = detectBug(it.text);
         if (b) { it.base = { v: 'bug', reason: b }; it.j = ''; it.len = it.text.length; keep.push(it); continue; }
@@ -282,6 +290,35 @@ import { detectBug, formatHints } from './rules.js';
         }
       }
     }
+    if (state.p.spell) await spellCheck(todo);
+  }
+
+  // Spelling and spacing: only on text judged to be in the target language (an untranslated string is already a warning of its own).
+  async function spellCheck(items) {
+    const key = (t) => state.p.lang + '|' + t;
+    const ok = items.filter((it) => it.base.v === 'ok' && it.j);
+    const need = [...new Set(ok.map((it) => it.j))].filter((t) => !spellCache.has(key(t)));
+    for (let i = 0; i < need.length; i += 400) {
+      const chunk = need.slice(i, i + 400);
+      let res = null;
+      try { res = await send({ type: 'tc-spell', lang: state.p.lang, texts: chunk }); } catch (e) { /* older worker: no hints */ }
+      if (!res || !Array.isArray(res.hints)) return;
+      chunk.forEach((t, k) => spellCache.set(key(t), res.hints[k] || []));
+      await tick();
+    }
+    for (const it of ok) { const h = spellCache.get(key(it.j)); if (h && h.length) it.spell = h; }
+  }
+
+  // Layout: text that is cut off or runs out of its box (rendered boxes; read-only).
+  function measureLayout() {
+    if (!state.p.layout) return;
+    let n = 0;
+    for (const it of state.items) {
+      it.layout = null;
+      if (it.kind !== 'text' || !it.node.isConnected || ++n > 4000) continue;
+      const pr = layoutProblem(it.node);
+      if (pr) it.layout = describeProblem(pr);
+    }
   }
 
   // Page-level tendency: if the page is clearly translated, unclear short strings almost certainly are too.
@@ -313,11 +350,15 @@ import { detectBug, formatHints } from './rules.js';
       ::highlight(${K.unsure}){background-color:rgba(80,140,255,.28);text-decoration:underline dotted #3b6df0}
       ::highlight(${K.bug}){background-color:rgba(190,60,255,.45);color:#111;text-decoration:underline wavy #7a1fa2}
       ::highlight(${K.fmt}){text-decoration:underline dotted #0f9d8a}
+      ::highlight(${K.spell}){text-decoration:underline wavy #e07a00}
+      ::highlight(${K.layout}){background-color:rgba(255,140,0,.18);text-decoration:underline dashed #e07a00}
       ::highlight(${K.focus}){background-color:#d7263d;color:#fff}
       [data-tc-flag="${NS}:bad"]{outline:2px dashed #d7263d!important;outline-offset:2px!important}
       [data-tc-flag="${NS}:unsure"]{outline:2px dotted #3b6df0!important;outline-offset:2px!important}
       [data-tc-flag="${NS}:bug"]{outline:2px dashed #7a1fa2!important;outline-offset:2px!important}
       [data-tc-flag="${NS}:fmt"]{outline:2px dotted #0f9d8a!important;outline-offset:2px!important}
+      [data-tc-flag="${NS}:spell"]{outline:2px dotted #e07a00!important;outline-offset:2px!important}
+      [data-tc-flag="${NS}:layout"]{outline:2px dashed #e07a00!important;outline-offset:2px!important}
       [data-tc-focus="${NS}"]{box-shadow:0 0 0 4px rgba(215,38,61,.5)!important}`;
     (rootNode.nodeType === 9 ? rootNode.head || rootNode.documentElement : rootNode).appendChild(s);
     styled.set(rootNode, s);
@@ -326,8 +367,8 @@ import { detectBug, formatHints } from './rules.js';
   function marksFor(win) {
     let m = marks.get(win);
     if (!m) {
-      m = { bad: new win.Highlight(), unsure: new win.Highlight(), bug: new win.Highlight(), fmt: new win.Highlight() };
-      m.bug.priority = 5; m.bad.priority = 4; m.unsure.priority = 2; m.fmt.priority = 1;
+      m = { bad: new win.Highlight(), unsure: new win.Highlight(), bug: new win.Highlight(), fmt: new win.Highlight(), spell: new win.Highlight(), layout: new win.Highlight() };
+      m.bug.priority = 5; m.bad.priority = 4; m.unsure.priority = 2; m.fmt.priority = 1; m.spell.priority = 1; m.layout.priority = 1;
       marks.set(win, m);
     }
     return m;
@@ -366,10 +407,11 @@ import { detectBug, formatHints } from './rules.js';
     resetMarks();
     purgeForeign();
     targets.clear();
-    const stats = { ok: 0, bad: 0, unsure: 0, bug: 0, fmt: 0, name: 0, okN: 0, badN: 0, unsureN: 0, bugN: 0, fmtN: 0, nameN: 0, assumedN: state.assumedN, ignoredN: state.ignoredN };
+    const stats = { ok: 0, bad: 0, unsure: 0, bug: 0, fmt: 0, name: 0, okN: 0, badN: 0, unsureN: 0, bugN: 0, fmtN: 0, nameN: 0, assumedN: state.assumedN, ignoredN: state.ignoredN,
+      spellN: 0, layoutN: 0, learnedN: state.learnedN };
     const issues = [];
     let id = 0;
-    const add = (it, verdict, reason, detected) => {
+    const add = (it, verdict, reason, detected, extra) => {
       const myId = ++id;
       targets.set(myId, it);
       const n = nodeOf(it);
@@ -383,7 +425,8 @@ import { detectBug, formatHints } from './rules.js';
         const cur = (n.getAttribute('data-tc-flag') || '').replace(NS + ':', '');
         if (!RANK[cur] || RANK[verdict] > RANK[cur]) n.setAttribute('data-tc-flag', NS + ':' + verdict);
       }
-      issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: it.v?.votes, confirmed: !!it.v?.confirmed, reason: reason && it.v?.via === 'context' && verdict !== 'fmt' ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length });
+      const hint = HINTS.has(verdict);
+      issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: hint ? undefined : it.v?.votes, confirmed: !hint && !!it.v?.confirmed, reason: reason && it.v?.via === 'context' && !hint ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length, ...extra });
     };
     for (const it of state.items) {
       if (!nodeOf(it).isConnected) continue;
@@ -391,24 +434,64 @@ import { detectBug, formatHints } from './rules.js';
       stats[v.v] += it.len; stats[v.v + 'N']++;
       if (v.v !== 'ok' && v.v !== 'name') add(it, v.v, v.reason, v.detected); // names are counted, never highlighted
       if (p.hints && it.fmt) for (const f of it.fmt) { stats.fmtN++; add(it, 'fmt', f); }
+      if (p.spell && it.spell) for (const h of it.spell) { stats.spellN++; add(it, 'spell', h.reason, undefined, { fix: h.fix, word: h.word, hint: h.type }); }
+      const lay = it.stretch || it.layout;
+      if (p.layout && lay) { stats.layoutN++; add(it, 'layout', lay, undefined, { stretched: !!it.stretch && !it.layout }); }
     }
     for (const win of marks.keys()) {
       const m = marks.get(win), reg = win.CSS.highlights;
-      if (m.bad.size) reg.set(K.bad, m.bad);
-      if (m.unsure.size) reg.set(K.unsure, m.unsure);
-      if (m.bug.size) reg.set(K.bug, m.bug);
-      if (m.fmt.size) reg.set(K.fmt, m.fmt);
+      for (const k of ['bad', 'unsure', 'bug', 'fmt', 'spell', 'layout']) if (m[k].size) reg.set(K[k], m[k]);
     }
-    const order = { bug: 0, bad: 1, unsure: 2, fmt: 3 };
-    issues.sort((a, b) => order[a.verdict] - order[b.verdict] || b.len - a.len);
-    state.allIssues = issues.slice(0, 5000);
+    const order = { bug: 0, bad: 1, unsure: 2, fmt: 3, spell: 4, layout: 5 };
+    const groups = group(issues);
+    groups.sort((a, b) => order[a.verdict] - order[b.verdict] || b.len - a.len);
+    state.allIssues = groups.slice(0, 5000);
+    for (const g of groups.slice(0, 300)) withContext(g, 12);
     const judged = stats.ok + stats.bad;
     last = {
       lang: p.lang, requested: p.requested, mode: p.mode, host: location.hostname, pageLang: document.documentElement.lang || '', stats,
       score: judged ? Math.round((stats.ok / judged) * 100) : null,
-      issues: issues.slice(0, 300).map((i) => ({ ...i, text: i.text.slice(0, 160) })), truncated: Math.max(0, issues.length - 300),
-      source: state.sourceInfo, models: state.models, live: !!observers.length,
+      issues: groups.slice(0, 300).map((i) => ({ ...i, text: i.text.slice(0, 160) })), truncated: Math.max(0, groups.length - 300),
+      source: state.sourceInfo, models: state.models, live: !!observers.length, stretched: state.stretched || 0,
     };
+  }
+
+  // ---------- Grouping: one item per identical string, mapped to every place it appears ----------
+  // Same verdict and same text (case and spacing ignored); hints also need the same reason. The score is counted per occurrence (above),
+  // so grouping only changes how the list is shown.
+  function group(issues) {
+    const by = new Map();
+    for (const i of issues) {
+      const k = `${i.verdict}|${HINTS.has(i.verdict) ? i.reason : ''}|${nk(i.text)}`;
+      const g = by.get(k);
+      if (!g) { by.set(k, { ...i, count: 1, occ: [{ id: i.id, kind: i.kind, attr: i.attr }] }); continue; }
+      g.count++; g.len += i.len;
+      g.occ.push({ id: i.id, kind: i.kind, attr: i.attr });
+      if (g.confirmed === false && i.confirmed) { g.confirmed = true; g.votes = i.votes; } // the strongest evidence among the copies
+    }
+    return [...by.values()];
+  }
+
+  // Context: where each copy sits (element kind, page region, heading, text around it), for the first `limit` copies.
+  function contextOf(id) {
+    const t = targets.get(id);
+    if (!t) return null;
+    const n = nodeOf(t);
+    const el = t.kind === 'text' ? n.parentElement || n.parentNode?.host : n;
+    if (!el) return null;
+    const ck = t.kind === 'attr' ? el : n;
+    let c = ctxCache.get(ck);
+    if (!c) { c = describe(t.kind === 'text' ? n : null, el, t.kind === 'attr' ? t.attr : undefined); ctxCache.set(ck, c); }
+    return c;
+  }
+  function withContext(g, limit) {
+    g.occ.forEach((o, k) => {
+      if (k >= limit || o.where !== undefined) return;
+      const c = contextOf(o.id);
+      o.where = contextLine(c); o.before = c?.before || ''; o.after = c?.after || '';
+      if (k === 0) { g.context = c ? { kind: c.kind, region: c.region, heading: c.heading, label: c.label, before: c.before, after: c.after, path: c.path } : null; g.slot = c?.slot || ''; }
+    });
+    return g;
   }
 
   function announce(live) {
@@ -423,7 +506,7 @@ import { detectBug, formatHints } from './rules.js';
     purgeForeign();
     for (const s of styled.values()) s.remove();
     styled.clear(); targets.clear();
-    state = null; last = null;
+    state = null; last = null; ctxCache = new WeakMap();
   }
 
   function focusIssue(id) {
@@ -467,9 +550,11 @@ import { detectBug, formatHints } from './rules.js';
     if (!state) return { issues: [] };
     return {
       url: location.href, title: document.title, lang: state.p.lang, generated: new Date().toISOString(), source: state.sourceInfo,
-      issues: state.allIssues.map((i) => {
-        const t = targets.get(i.id), n = t && nodeOf(t);
-        return { ...i, selector: n ? selectorOf(t.kind === 'text' ? n.parentElement || n.parentNode?.host : n) : '' };
+      issues: state.allIssues.map((g) => {
+        withContext(g, Infinity);
+        const sel = (id) => { const t = targets.get(id), n = t && nodeOf(t); return n ? selectorOf(t.kind === 'text' ? n.parentElement || n.parentNode?.host : n) : ''; };
+        const occurrences = g.occ.map((o) => ({ selector: sel(o.id), where: o.where, before: o.before, after: o.after, kind: o.kind, attr: o.attr }));
+        return { ...g, selector: occurrences[0]?.selector || '', occurrences };
       }),
     };
   }
@@ -479,6 +564,7 @@ import { detectBug, formatHints } from './rules.js';
     if (observed.has(root)) return;
     observed.add(root);
     const mo = new MutationObserver((records) => {
+      if (state?.stretching) return; // the stretch test's own temporary changes (already undone)
       for (const r of records) {
         if (r.type === 'characterData') { const e = r.target.parentElement || r.target.parentNode?.host; if (e) dirty.add(e); }
         else {
@@ -509,7 +595,7 @@ import { detectBug, formatHints } from './rules.js';
       state.items.push(...keep);
       await judge(keep);
       if (my !== seq || !state) return;
-      finalize(); render();
+      finalize(); measureLayout(); render();
       for (const r of state.scope.roots) observe(r);
       announce(true);
     } catch (e) { /* keep the previous result */ } finally {
@@ -536,9 +622,11 @@ import { detectBug, formatHints } from './rules.js';
       related: params.related !== false, ignore: params.ignore || [], hints: !!params.hints,
       bugs: params.bugs !== false, source: params.source !== false, live: params.live !== false,
       verify: params.verify !== false, confirmedOnly: !!params.confirmedOnly,
+      spell: params.spell !== false, layout: params.layout !== false, learned: Array.isArray(params.learned) ? params.learned : [],
     };
-    state = { p, items: [], scope: { roots: new Set() }, ctx: null, ignoredN: 0, assumedN: 0, allIssues: [], source: null, sourceInfo: { status: p.source ? 'none' : 'off' },
-      termRe: compileTerms([...p.ignore, ...siteTerms()]) };
+    const learnedTerms = p.learned.filter((r) => r.type === 'term').map((r) => r.value);
+    state = { p, items: [], scope: { roots: new Set() }, ctx: null, ignoredN: 0, assumedN: 0, learnedN: 0, allIssues: [], source: null, sourceInfo: { status: p.source ? 'none' : 'off' },
+      termRe: compileTerms([...p.ignore, ...learnedTerms, ...siteTerms()]), learnMatch: matcher(p.learned) };
     try {
       const srcP = p.source ? loadSource(p) : null; // runs while we collect
       const raw = [];
@@ -554,7 +642,7 @@ import { detectBug, formatHints } from './rules.js';
       }
       await judge(keep);
       if (my !== seq || !state) return { error: 'A newer check replaced this one.' };
-      finalize(); render();
+      finalize(); measureLayout(); render();
       if (p.live) for (const r of state.scope.roots) observe(r);
       last.live = !!observers.length;
       announce(false);
@@ -564,8 +652,27 @@ import { detectBug, formatHints } from './rules.js';
     }
   }
 
+  // ---------- Stretch test: would the layout survive longer (translated) text? ----------
+  function stretch(pct) {
+    if (!state) return { error: 'Run a check first.' };
+    const p = Math.min(200, Math.max(5, Math.round(pct) || 35));
+    const items = state.items.filter((it) => it.kind === 'text' && it.node.isConnected);
+    state.stretching = true;
+    let found = [];
+    try { found = stretchTest(items.map((it) => it.node), p); } finally {
+      observers.forEach((o) => o.takeRecords()); // drop the records of our own (already undone) changes
+      state.stretching = false;
+    }
+    const byNode = new Map(found.map((f) => [f.node, f.problem]));
+    for (const it of state.items) it.stretch = byNode.has(it.node) ? describeProblem(byNode.get(it.node), p) : null;
+    state.stretched = p;
+    render();
+    return { ...last, stretchFound: found.length };
+  }
+
   api.runtime.onMessage.addListener((msg, _sender, reply) => {
     switch (msg?.type) {
+      case 'stretch': reply(stretch(msg.pct)); break;
       case 'scan': scan(msg).then(reply, (e) => reply({ error: String(e) })); return true;
       case 'clear': clearAll(); announce(false); reply({ ok: true }); break;
       case 'focus': reply({ ok: focusIssue(msg.id) }); break;
@@ -579,11 +686,12 @@ import { detectBug, formatHints } from './rules.js';
   // Sites the user opted in to are checked automatically after load.
   (async () => {
     try {
-      const d = await api.storage.local.get(['opts', 'autoSites', 'ignore']);
+      const d = await api.storage.local.get(['opts', 'autoSites', 'ignore', 'learn']);
       if (!d || !d.opts || !(d.autoSites || []).includes(location.hostname)) return;
       await new Promise((r) => setTimeout(r, 1200));
       const ig = d.ignore || {};
-      await scan({ ...d.opts, live: true, ignore: [...(ig.global || []), ...((ig.sites || {})[location.hostname] || [])] });
+      const learned = d.learn && d.learn.on !== false && Array.isArray(d.learn.rules) ? d.learn.rules.filter((r) => r && (r.scope === '*' || r.scope === location.hostname)) : [];
+      await scan({ ...d.opts, live: true, ignore: [...(ig.global || []), ...((ig.sites || {})[location.hostname] || [])], learned });
     } catch (e) { /* storage unavailable */ }
   })();
 })();

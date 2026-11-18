@@ -12,7 +12,7 @@ httpd = socketserver.ThreadingTCPServer(('127.0.0.1', 8791), Q); threading.Threa
 # Test copy of the extension. The ONLY difference from the real one: host permissions for the local test server,
 # which stand in for the user's toolbar click ("activeTab"); a headless browser can't click the toolbar.
 EXT = tempfile.mkdtemp(prefix='tc-ext-')
-for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js']: shutil.copy(ROOT / f, EXT)
+for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js', 'learn.js']: shutil.copy(ROOT / f, EXT)
 shutil.copytree(ROOT / 'icons', pathlib.Path(EXT) / 'icons'); shutil.copytree(ROOT / 'vendor', pathlib.Path(EXT) / 'vendor')
 m = json.load(open(pathlib.Path(EXT) / 'manifest.json')); m['host_permissions'] = ['http://127.0.0.1/*']; json.dump(m, open(pathlib.Path(EXT) / 'manifest.json', 'w'))
 B = 'http://127.0.0.1:8791'

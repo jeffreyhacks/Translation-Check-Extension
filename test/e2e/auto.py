@@ -9,7 +9,7 @@ class Q(http.server.SimpleHTTPRequestHandler):
 socketserver.ThreadingTCPServer.allow_reuse_address = True; socketserver.ThreadingTCPServer.daemon_threads = True
 threading.Thread(target=socketserver.ThreadingTCPServer(('127.0.0.1', 8799), Q).serve_forever, daemon=True).start()
 EXT = tempfile.mkdtemp(prefix='tc-ext-')
-for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js']: shutil.copy(ROOT/f, EXT)
+for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js', 'learn.js']: shutil.copy(ROOT/f, EXT)
 shutil.copytree(ROOT/'icons', pathlib.Path(EXT)/'icons'); shutil.copytree(ROOT/'vendor', pathlib.Path(EXT)/'vendor')
 B = 'http://127.0.0.1:8799'
 SHOTS = ROOT/'test'/'e2e'/'shots'; SHOTS.mkdir(exist_ok=True)

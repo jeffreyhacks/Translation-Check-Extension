@@ -1,0 +1,127 @@
+# Real Chromium, 2.0.6: grouped strings with their locations, context lines, Ignore that learns, spelling hints, layout check (real boxes)
+# and the stretch test (text 35% longer, then exactly restored). Usage: python test/e2e/v206.py
+import http.server, socketserver, threading, time, json, sys, os, shutil, tempfile, pathlib
+from playwright.sync_api import sync_playwright
+ROOT = pathlib.Path(__file__).resolve().parents[2]; SITE = ROOT/'test'/'e2e'/'site'; SHOTS = ROOT/'test'/'e2e'/'shots'; SHOTS.mkdir(exist_ok=True)
+os.chdir(SITE)
+class Q(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *a): pass
+socketserver.ThreadingTCPServer.allow_reuse_address = True; socketserver.ThreadingTCPServer.daemon_threads = True
+threading.Thread(target=socketserver.ThreadingTCPServer(('127.0.0.1', 8799), Q).serve_forever, daemon=True).start()
+EXT = tempfile.mkdtemp(prefix='tc-ext-')
+for f in ['manifest.json', 'content.js', 'background.js', 'pdfcheck.js', 'popup.html', 'panel.html', 'popup.css', 'popup.js', 'learn.js']: shutil.copy(ROOT/f, EXT)
+shutil.copytree(ROOT/'icons', pathlib.Path(EXT)/'icons'); shutil.copytree(ROOT/'vendor', pathlib.Path(EXT)/'vendor')
+m = json.load(open(pathlib.Path(EXT)/'manifest.json')); m['host_permissions'] = ['http://127.0.0.1/*']; json.dump(m, open(pathlib.Path(EXT)/'manifest.json', 'w'))
+B = 'http://127.0.0.1:8799'; URL = B + '/v206.html'
+res = []
+def t(n, c, x=''): res.append(bool(c)); print(('PASS  ' if c else 'FAIL  ') + n + ('' if c else '  ' + str(x)))
+INIT = "window.__T=%r;const _q=chrome.tabs.query.bind(chrome.tabs);chrome.tabs.query=async(q)=>(q&&q.active&&q.currentWindow)?(await _q({})).filter(x=>x.url&&x.url.startsWith(window.__T)):_q(q);"
+
+def wait_idle(pop):
+    for _ in range(150):
+        if pop.evaluate("()=>!document.querySelector('#scan').disabled"): break
+        time.sleep(0.3)
+    time.sleep(0.4)
+
+def rows(pop):
+    return pop.eval_on_selector_all('#list li', 'els => els.map(e => e.innerText.replace(/\\s+/g," "))')
+
+def snippets(pop):  # just the flagged text of each row (rows also show their context, which mentions neighbouring text)
+    return pop.eval_on_selector_all('#list li .snippet', 'els => els.map(e => e.textContent.trim())')
+
+def set_lang(pop, code):
+    pop.evaluate("c => { const s = document.querySelector('#lang'); s.value = c; s.dispatchEvent(new Event('change')); }", code)
+
+with sync_playwright() as p:
+    for attempt in range(4):
+        ctx = p.chromium.launch_persistent_context(tempfile.mkdtemp(prefix='tc-prof-'), executable_path=os.environ.get('CHROME') or p.chromium.executable_path, headless=False,
+            args=['--headless=new', '--no-sandbox', f'--disable-extensions-except={EXT}', f'--load-extension={EXT}'], viewport={'width': 900, 'height': 900})
+        sw = None
+        for _ in range(60):
+            if ctx.service_workers: sw = ctx.service_workers[0]; break
+            time.sleep(0.2)
+        if sw: break
+        print(f'(extension did not start on launch {attempt + 1}, relaunching)'); ctx.close()
+    if not sw: sys.exit('extension never started')
+    ext = sw.url.split('/')[2]
+    errors = []
+    pg = ctx.new_page(); pg.on('pageerror', lambda e: errors.append(str(e))); pg.goto(URL); pg.bring_to_front()
+    original = pg.evaluate('() => document.body.innerHTML')
+    pop = ctx.new_page(); pop.on('pageerror', lambda e: errors.append('popup: ' + str(e)))
+    pop.add_init_script(INIT % URL); pop.goto(f'chrome-extension://{ext}/popup.html'); pop.wait_for_selector('#langInput'); time.sleep(0.5)
+
+    # ---- English check: spelling + layout hints on a translated page, score unaffected
+    set_lang(pop, 'en'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
+    t('en: the page counts as fully translated (hints do not change the score)', pop.inner_text('#score') == '100%', pop.inner_text('#score'))
+    t('en: spelling tab is shown', pop.is_visible('#tabSpell'))
+    pop.click('#tabSpell'); time.sleep(0.2); sp = ' '.join(rows(pop))
+    t('en: the typo and the repeated word are found, with a suggestion', 'Receive' in sp and 'the the' in sp, sp)
+    t('en: layout tab is shown', pop.is_visible('#tabLayout'))
+    pop.click('#tabLayout'); time.sleep(0.2); lay = rows(pop); lj = ' '.join(lay); ls = snippets(pop)
+    t('layout: the fixed-width button text is cut off', any('Save all changes now' in r and 'Cut off' in r for r in lay), lay)
+    t('layout: the ellipsis sidebar link is "cut off with …"', any('Account notification' in r and '…' in r for r in lay), lay)
+    t('layout: the scroll area is not flagged', not any('scrolling box' in x for x in ls), ls)
+    t('layout: screen-reader-only text is not flagged', not any('Screen reader only' in x for x in ls), ls)
+    t('layout: exactly the two broken places are flagged (text that fits is not)', sorted(ls) == ['Account notification preferences', 'Save all changes now'], ls)
+    pop.screenshot(path=str(SHOTS/'v206-layout-tab.png'))
+
+    # ---- stretch test: finds what breaks only when longer, restores the page exactly
+    pop.click('#stretch'); time.sleep(0.5)
+    for _ in range(40):
+        if pop.evaluate("()=>!document.querySelector('#stretch').disabled"): break
+        time.sleep(0.25)
+    status = pop.inner_text('#status'); lay2 = rows(pop); ls2 = snippets(pop)
+    t('stretch: reports what breaks with 35% longer text', 'longer' in status and any('Export the report' in r and '35% longer' in r for r in lay2), (status, lay2))
+    t('stretch: only the tight button newly breaks; text with room to grow is fine', sorted(ls2) == ['Account notification preferences', 'Export the report', 'Save all changes now'], ls2)
+    time.sleep(1.2)
+    t('stretch: the page HTML is exactly as before', pg.evaluate('() => document.body.innerHTML') == original)
+    t('stretch: the page is still marked as checked (live mode did not re-run)', pop.inner_text('#score') == '100%')
+    pop.screenshot(path=str(SHOTS/'v206-stretch.png'))
+
+    # ---- Spanish check: everything English is untranslated; repeated strings grouped, with context
+    set_lang(pop, 'es'); pop.click('#tabBad'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
+    bad = rows(pop)
+    add = [r for r in bad if r.startswith('Add to cart')]
+    t('group: "Add to cart" is one row marked ×3', len(add) == 1 and '×3' in add[0], bad)
+    t('group: untranslated count still counts every copy', int(pop.inner_text('#nBad')) >= len(bad) + 2, (pop.inner_text('#nBad'), len(bad)))
+    t('context: the row shows the element and its card heading', 'button · Main' in add[0] and '“Blue shirt”' in add[0], add[0])
+    idx = next(i for i, r in enumerate(bad) if r.startswith('Add to cart'))
+    sel = f'#list li:nth-child({idx + 1}) > button'
+    pop.click(sel); time.sleep(0.6)
+    y1 = pg.evaluate("() => [...document.querySelectorAll('button.cart')].map(b => b.getBoundingClientRect().top)")
+    second = pop.inner_text(f'#list li:nth-child({idx + 1})')
+    pop.click(sel); time.sleep(0.6)
+    t('group: clicking again moves to the next copy (2 of 3, next card)', '2 of 3' in pop.inner_text(f'#list li:nth-child({idx + 1})') and '“Black trousers”' in pop.inner_text(f'#list li:nth-child({idx + 1})'), pop.inner_text(f'#list li:nth-child({idx + 1})'))
+    pop.screenshot(path=str(SHOTS/'v206-grouped.png'))
+
+    # ---- learning: ignore three product names in the same slot -> the fourth is skipped automatically
+    for name in ['Blue shirt', 'Black trousers', 'Grey jacket']:
+        r = rows(pop); i = next(k for k, x in enumerate(r) if x.startswith(name))
+        pop.click(f'#list li:nth-child({i + 1}) .ignore-btn'); time.sleep(0.4); wait_idle(pop)
+    note = pop.inner_text('#learnText') if pop.is_visible('#learnNote') else ''
+    t('learn: the third Ignore in the same slot learns a rule and says so', 'span.pname' in note, note)
+    after = ' '.join(rows(pop)); sn = snippets(pop)
+    t('learn: the fourth product name (never ignored by hand) is skipped automatically', 'Red scarf' not in sn, sn)
+    chips = pop.eval_on_selector_all('#chips .chip', 'els => els.map(e => e.textContent.trim())')
+    t('learn: an "auto-ignored" chip counts it', any('auto-ignored' in c for c in chips), chips)
+    t('learn: other English text is still flagged', 'Add to cart' in after and 'Organic cotton' in after, after)
+    pop.screenshot(path=str(SHOTS/'v206-learned.png'))
+    pop.click('#learnUndo'); time.sleep(0.5); wait_idle(pop)
+    t('learn: Undo brings the skipped name back', 'Red scarf' in snippets(pop), snippets(pop))
+
+    # ---- export: CSV has the new columns and all three locations
+    with pop.expect_download() as dl: pop.click('#expCsv')
+    csv = open(dl.value.path(), encoding='utf-8-sig').read()
+    t('export: CSV has occurrences and context columns', '"occurrences","context","surrounding text","all locations","suggestion"' in csv.splitlines()[0])
+    line = next((l for l in csv.splitlines() if l.startswith('"Not translated","Add to cart"')), '')
+    t('export: the grouped row lists 3 occurrences', ',"3",' in line, line[:200])
+
+    # context must not borrow the heading of a neighbouring card
+    pop.click('#tabBad'); time.sleep(0.2)
+    exp = next((r for r in rows(pop) if r.startswith('Export the report')), '')
+    t('context: a button after the cards is not labelled with the last card\'s heading', exp and '“Red scarf”' not in exp, exp)
+    pg.bring_to_front(); time.sleep(0.3); pg.screenshot(path=str(SHOTS/'v206-page.png'))
+    t('no script errors on the page or in the popup', not errors, errors)
+    t('the page was not changed by any of it', pg.evaluate('() => document.body.innerHTML') == original)
+    ctx.close()
+print(f'\n2.0.6 e2e: {sum(res)} passed, {len(res)-sum(res)} failed'); sys.exit(0 if all(res) else 1)

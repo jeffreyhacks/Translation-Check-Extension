@@ -51,12 +51,19 @@
       <label class="opt"><input type="checkbox" id="hints"><i></i><span class="txt"><span class="t">Format hints</span><span class="d">Number, price and date formats</span></span></label>
     </div>
     <div class="grp">
+      <h2>Quality</h2>
+      <label class="opt"><input type="checkbox" id="spell" checked><i></i><span class="txt"><span class="t">Spelling &amp; spacing</span><span class="d">Typos, repeated and run-together words (typos: English)</span></span></label>
+      <label class="opt"><input type="checkbox" id="layout" checked><i></i><span class="txt"><span class="t">Layout check</span><span class="d">Text cut off or running out of its box</span></span></label>
+    </div>
+    <div class="grp">
       <h2>This site</h2>
       <label class="opt"><input type="checkbox" id="auto"><i></i><span class="txt"><span class="t">Check <b id="hostName">site</b> automatically</span><span class="d">Runs when the site loads</span></span></label>
       <details class="ignore">
         <summary>Ignore list</summary>
         <textarea id="ignoreSite" rows="2" placeholder="This site — one term per line"></textarea>
         <textarea id="ignoreGlobal" rows="2" placeholder="All sites — one term per line"></textarea>
+        <label class="opt"><input type="checkbox" id="learn" checked><i></i><span class="txt"><span class="t">Learn from Ignore</span><span class="d">After 3 similar Ignores, skip the rest automatically</span></span></label>
+        <ul id="learnedList" class="learned" aria-label="Learned rules"></ul>
         <div class="row"><button id="impIgnore" class="ghost">Import</button><button id="expIgnore" class="ghost">Export</button><input type="file" id="impFile" accept="application/json" hidden></div>
       </details>
     </div>
@@ -87,24 +94,32 @@
       <span id="mismatchText"></span>
       <button id="mismatchFix"></button>
     </div>
+    <div id="learnNote" class="banner learnt" hidden role="status">
+      <span id="learnText"></span>
+      <button id="learnUndo">Undo</button>
+    </div>
 
     <div class="tabs" role="tablist">
       <button role="tab" id="tabBad" aria-selected="true" title="Not translated"><i class="dot bad"></i><span class="lbl">Untranslated</span><span class="n">0</span></button>
       <button role="tab" id="tabUnsure" aria-selected="false" title="Can’t tell"><i class="dot unsure"></i><span class="lbl">Unclear</span><span class="n">0</span></button>
       <button role="tab" id="tabBug" aria-selected="false" title="Broken text" hidden><i class="dot bug"></i><span class="lbl">Broken</span><span class="n">0</span></button>
       <button role="tab" id="tabFmt" aria-selected="false" title="Format hints" hidden><i class="dot fmt"></i><span class="lbl">Format</span><span class="n">0</span></button>
+      <button role="tab" id="tabSpell" aria-selected="false" title="Spelling and spacing" hidden><i class="dot spell"></i><span class="lbl">Spelling</span><span class="n">0</span></button>
+      <button role="tab" id="tabLayout" aria-selected="false" title="Layout: text cut off or out of its box" hidden><i class="dot layout"></i><span class="lbl">Layout</span><span class="n">0</span></button>
     </div>
     <div class="nav">
       <button id="prev" class="icon sm" title="Previous"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
       <span id="pos">0 / 0</span>
       <button id="next" class="icon sm" title="Next"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
       <span class="spacer"></span>
+      <button id="stretch" class="ghost" title="Stretch test: make all text 35% longer (like a German or Finnish translation) and list layout that breaks. The page text is put back right away."><svg viewBox="0 0 24 24"><path d="M4 12h16M7 9l-3 3 3 3M17 9l3 3-3 3"/></svg>+35%</button>
       <button id="expCsv" class="ghost" title="Download CSV"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>CSV</button>
       <button id="expHtml" class="ghost" title="Download HTML report"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>Report</button>
     </div>
     <ul id="list"></ul>
   </section>
 
+  <script src="learn.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

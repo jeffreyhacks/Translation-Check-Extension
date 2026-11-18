@@ -5,6 +5,7 @@ import { createVerifier } from './verify.js';
 import { guardShort } from './guard.js';
 import { knownName, nameShape, isLabel } from './names.js';
 import { allEnglish } from './english.js';
+import { spellHints } from './spell.js';
 
 const api = globalThis.chrome;
 const CAPITALISES = new Set(['de', 'lb']); // German capitalises every noun, so a capitalised phrase there says nothing about names
@@ -89,6 +90,10 @@ api.runtime.onMessage.addListener((msg, sender, send) => {
   if (msg?.type === 'tc-classify') {
     classify(msg).then(send, (e) => send({ error: String(e) }));
     return true;
+  }
+  if (msg?.type === 'tc-spell') { // spelling and spacing hints (the English dictionary lives here, not in every page)
+    try { send({ hints: (msg.texts || []).map((t) => spellHints(String(t || ''), msg.lang)) }); } catch (e) { send({ error: String(e) }); }
+    return false;
   }
   if (msg?.type === 'tc-dominant') { // language of a document that doesn't declare one (PDFs)
     send({ lang: engine.dominant(msg.texts || []) });

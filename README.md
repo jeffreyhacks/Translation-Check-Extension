@@ -1,4 +1,4 @@
-# Translation Check 2.0.5
+# Translation Check 2.0.6
 
 Checks whether a web page **or a PDF open in the browser** is fully in the language you pick, and highlights what isn't.
 Load this folder in `chrome://extensions` (Developer mode → Load unpacked). Needs Chrome 114+.
@@ -62,6 +62,39 @@ not ordinary vocabulary) **and** the models cannot agree on any language for it,
 vocabulary such as "Order History" or "Wish List" is a *label*, not a name, and is still checked. German pages don't use the shape rule
 (German capitalises every noun). A single unknown capitalised word stays *unclear*.
 
+## Repeated strings: one item, every place it appears
+The same text with the same verdict is listed once, with **×N**. Click it to go to the first place; click it again to go to the next one
+(**2 of 3**). The score, the counts and the toolbar badge still count every copy, so grouping changes only how the list reads.
+
+## Context: where each string sits
+Every item says what it is and where: *button · Navigation “Main menu”*, *placeholder · Form “Newsletter” › field “Email”*,
+*button · Main › “Blue shirt”* (the heading of its own card or section, never a neighbouring one), plus the text just before and after it.
+CSV and HTML exports carry this for every copy (new columns are added at the end, after the original eight).
+
+## Ignore that learns
+Ignore still adds the exact text to this site's list. It also remembers what the text looked like and where it was. Three similar Ignores make a rule:
+- the same text ignored on two sites → ignored on all sites;
+- three different texts of one narrow shape on a site → that shape is ignored there: codes (`SKU-1234`), versions (`v2.4.1`), abbreviations,
+  BrandCase names (`HubSpot`), `@handles`, ™ names, identifiers (`user_name`);
+- three different texts in the same page slot → text in that slot is ignored there (`span.user-name`, `[data-testid="sku"]`). A slot is the
+  element's own class or test id, never a container further up (`div.card` would cover the whole card).
+
+Broad shapes (a capitalised word, two capitalised words) are never learned: they would also hide real untranslated labels. The popup says
+what it learned, with **Undo**; Settings → *Ignore list* lists the rules with **Remove**, and a removed rule is never learned again. Skipped
+texts show as an *auto-ignored* chip. *Learn from Ignore* switches it off. The ignore-list export (version 2) includes the rules.
+
+## Spelling and spacing
+A separate **Spelling** tab (not part of the score): repeated words ("the the"), a missing space after punctuation ("Save,cancel",
+"done.Next"), run-together words ("Addto cart", "Clickhere") and likely typos ("Recieve" → "Receive"). Only text judged translated is
+checked. Typos and run-together words need a full dictionary, so they are English-only; the spacing rules apply to every language
+written with spaces. Capitalised words are not called typos (they are names more often than not) unless they are a known misspelling.
+
+## Layout: text cut off or out of its box
+A separate **Layout** tab (not part of the score) lists text that is cut off by its container (including "…" truncation and line clamps)
+or runs out of its own box, measured from the rendered page. Scroll areas, screen-reader-only text and hidden slides are not flagged.
+**+35%** runs the stretch test: all text is made 35% longer (about what English grows into German or Finnish), the page is measured
+again, and the exact original text is put back in the same step. Only what *newly* breaks is listed.
+
 ## Checking a site automatically
 Settings → *This site* → *Check … automatically* asks Chrome for access to that one site (one prompt) and then checks every page you open there.
 The choice is saved first and the background worker finishes the setup, so it also works if Chrome closes the popup while it shows the prompt.
@@ -79,5 +112,5 @@ to let the extension read the file: the first local PDF asks for it once (option
 ## Layout
 - `background.js` – service worker: the language models (loaded once for the whole browser).
 - `content.js` – small page-side scanner. `pdfcheck.js` + `vendor/` – PDF reader (pdf.js, Apache-2.0).
-- `popup.html` / `panel.html` + `popup.js` – popup and side panel (same code).
+- `popup.html` / `panel.html` + `popup.js` – popup and side panel (same code). `learn.js` – ignore-list learning (from `src/learn.js`).
 - `src/` – sources. `npm install && npm run build` rebuilds; `npm test` runs the checks; `test/e2e/` drives a real Chromium.

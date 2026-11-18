@@ -4,7 +4,9 @@ const api = globalThis.chrome?.runtime?.id ? globalThis.chrome : (globalThis.bro
 const $ = (s) => document.querySelector(s);
 const IS_PANEL = document.body.classList.contains('panel');
 const LANGS = 'en es fr de it pt nl sv da no fi pl cs sk hu ro bg hr el tr ru uk ar fa he ur hi bn ta te th vi id ms sw ja ko zh ca'.split(' ');
-const VIEWS = { bad: '#tabBad', unsure: '#tabUnsure', bug: '#tabBug', fmt: '#tabFmt' };
+const VIEWS = { bad: '#tabBad', unsure: '#tabUnsure', bug: '#tabBug', fmt: '#tabFmt', spell: '#tabSpell', layout: '#tabLayout' };
+// Ignore-list learning (learn.js, loaded before this file). Missing in very old builds: then Ignore just adds the term, as before.
+const L = globalThis.TCLearn || null;
 const english = new Intl.DisplayNames(['en'], { type: 'language' });
 const nameOf = (c) => { try { return english.of(c) || c; } catch { return c; } };
 const isPdfUrl = (u) => /\.pdf([?#]|$)/i.test(u || '');
@@ -21,7 +23,7 @@ const ICON = {
 };
 
 let tabId = null, tabUrl = '', host = '', isPdf = false, result = null, view = 'bad', cursor = -1;
-let ign = { global: [], sites: {} }, autoSites = [];
+let ign = { global: [], sites: {} }, autoSites = [], mem = L ? L.emptyMemory() : null, occAt = new Map(), lastLearned = [];
 
 // ---------- Language picker: "Page's own language", then English name first, e.g. "German (Deutsch)" ----------
 {
@@ -43,9 +45,11 @@ function setStatus(msg, err = false) { $('#status').textContent = msg; $('#statu
 const lines = (s) => s.split('\n').map((x) => x.trim()).filter(Boolean);
 const mode = () => document.querySelector('input[name=mode]:checked')?.value || 'balanced';
 const storable = () => ({ lang: $('#lang').value, mode: mode(), attrs: $('#attrs').checked, unsure: $('#unsure').checked, related: $('#related').checked,
-  verify: $('#verify').checked, confirmedOnly: $('#confirmed').checked, live: $('#live').checked, source: $('#source').checked, hints: $('#hints').checked });
-const options = () => ({ ...storable(), ignore: [...ign.global, ...(ign.sites[host] || [])] });
-const save = () => api.storage.local.set({ opts: storable(), ignore: ign, autoSites });
+  verify: $('#verify').checked, confirmedOnly: $('#confirmed').checked, live: $('#live').checked, source: $('#source').checked, hints: $('#hints').checked,
+  spell: $('#spell').checked, layout: $('#layout').checked });
+const learnedRules = () => (L && mem && mem.on ? L.rulesFor(mem, host) : []);
+const options = () => ({ ...storable(), ignore: [...ign.global, ...(ign.sites[host] || [])], learned: learnedRules() });
+const save = () => api.storage.local.set({ opts: storable(), ignore: ign, autoSites, ...(mem ? { learn: mem } : {}) });
 const send = (msg) => api.tabs.sendMessage(tabId, msg);
 // Browser pages (vivaldi:, chrome:, edge:, opera:, about:...) can never be scripted by an extension.
 const BROWSER_PAGE = /^(?:chrome|chrome-extension|chrome-search|chrome-untrusted|devtools|edge|brave|opera|vivaldi|about|view-source|extension|moz-extension):/i;
@@ -96,6 +100,7 @@ function renderChips() {
   if (stats.ignoredN) box.append(chip(ICON.skip, `${stats.ignoredN} skipped`, `${stats.ignoredN} numbers, times, codes, names and language names skipped`));
   if (stats.nameN) box.append(chip(ICON.user, `${stats.nameN} ${stats.nameN === 1 ? 'name' : 'names'}`, 'People, places and brands read the same in every language, so they were left alone'));
   if (stats.assumedN) box.append(chip('', `${stats.assumedN} assumed`, 'Unclear short strings assumed translated because the rest of the page is'));
+  if (stats.learnedN) box.append(chip(ICON.skip, `${stats.learnedN} auto-ignored`, 'Skipped by rules learned from your Ignore clicks (Settings › Ignore list)'));
 }
 
 function render() {
@@ -120,9 +125,12 @@ function render() {
     $('#mismatchFix').onclick = () => { setLang(fix); save().then(() => runScan()); };
   }
 
-  const counts = { bad: stats.badN, unsure: stats.unsureN, bug: stats.bugN, fmt: stats.fmtN };
+  const counts = { bad: stats.badN, unsure: stats.unsureN, bug: stats.bugN, fmt: stats.fmtN, spell: stats.spellN, layout: stats.layoutN };
   $('#tabBug').hidden = !stats.bugN;
   $('#tabFmt').hidden = !$('#hints').checked && !stats.fmtN;
+  $('#tabSpell').hidden = !stats.spellN;
+  $('#tabLayout').hidden = !stats.layoutN;
+  $('#stretch').hidden = result.kind === 'pdf';
   if ($(VIEWS[view]).hidden) view = 'bad';
   for (const [k, sel] of Object.entries(VIEWS)) {
     $(sel).setAttribute('aria-selected', k === view);
@@ -136,14 +144,22 @@ function render() {
   $('#pos').textContent = `${cursor + 1} / ${rows.length}`;
   $('#prev').disabled = $('#next').disabled = !rows.length;
   if (!rows.length) {
-    list.append(el('li', 'empty', { bad: 'Nothing untranslated 🎉', unsure: 'Nothing unclear', bug: 'No broken text', fmt: 'No format hints' }[view]));
+    list.append(el('li', 'empty', { bad: 'Nothing untranslated 🎉', unsure: 'Nothing unclear', bug: 'No broken text', fmt: 'No format hints', spell: 'No spelling or spacing issues', layout: 'No layout problems' }[view]));
     return;
   }
   rows.forEach((i, idx) => {
     const li = el('li', i.verdict + (idx === cursor ? ' current' : ''));
     const b = el('button');
     b.append(el('span', 'snippet', i.text)); // page text is always inserted as text, never HTML
+    // where it is: the copy currently shown, e.g. "button · Navigation › “Settings”"
+    const occ = i.occ || [], at = Math.min(occAt.get(i.id) || 0, Math.max(occ.length - 1, 0)), o = occ[at];
+    const whereTxt = (o && o.where) || (at === 0 && i.context && [i.context.kind, i.context.path].filter(Boolean).join(' · ')) || '';
+    if (whereTxt) b.append(el('span', 'where', whereTxt));
+    if (o && (o.before || o.after)) b.append(el('span', 'near', `${o.before ? o.before + ' ' : ''}[ … ]${o.after ? ' ' + o.after : ''}`));
     const meta = el('span', 'meta');
+    if ((i.count || 1) > 1) { const c = el('span', 'tag count', `×${i.count}`); c.title = `Appears ${i.count} times on this page — click again to go to the next one`; meta.append(c); }
+    if (occ.length > 1 && idx === cursor) meta.append(el('span', 'tag', `${at + 1} of ${occ.length}`));
+    if (i.fix && i.verdict === 'spell') meta.append(el('span', 'fix', '→ ' + i.fix));
     const det = i.detected && i.detected.length <= 3 ? nameOf(i.detected) : i.detected;
     if (det) meta.append(el('span', 'tag', det));
     if (i.kind === 'pdf') meta.append(el('span', 'tag', `p.${i.page}${i.pages && i.pages.length > 1 ? ` +${i.pages.length - 1}` : ''}`));
@@ -162,12 +178,22 @@ function render() {
     b.append(meta);
     if (i.reason) b.append(el('span', 'why', i.reason));
     b.title = i.reason || 'Too short or ambiguous to judge';
-    b.addEventListener('click', () => { cursor = idx; focusRow(i); render(); });
+    if (o && (o.before || o.after)) b.title = `${b.title}\n\n${o.before} ⟦${i.text}⟧ ${o.after}`.trim();
+    // a click on the selected row moves on to the next place the same text appears
+    b.addEventListener('click', () => {
+      if (cursor === idx && occ.length > 1) occAt.set(i.id, (at + 1) % occ.length); else if (cursor !== idx) occAt.set(i.id, 0);
+      cursor = idx; focusRow(i); render();
+    });
     li.append(b);
     if ((i.verdict === 'bad' || i.verdict === 'unsure') && i.text.length <= 60) { // one-click "never flag this"
       const x = el('button', 'ignore-btn', 'Ignore');
-      x.title = 'Never flag this text';
-      x.addEventListener('click', () => addIgnore(i.text));
+      x.title = (i.count || 1) > 1 ? `Never flag this text (all ${i.count} places)` : 'Never flag this text';
+      x.addEventListener('click', () => addIgnore(i.text, i));
+      li.append(x);
+    } else if (i.verdict === 'spell' && i.word && i.hint === 'typo') { // a name or a term, not a typo
+      const x = el('button', 'ignore-btn', 'Ignore');
+      x.title = `“${i.word}” is spelled correctly: never flag it`;
+      x.addEventListener('click', () => addIgnore(i.word, null));
       li.append(x);
     }
     list.append(li);
@@ -180,7 +206,8 @@ async function focusRow(i) {
     try { await navigator.clipboard.writeText(i.text.slice(0, 80)); setStatus(`Page ${i.page} · snippet copied, press Ctrl+F to find it`); } catch { setStatus(`Page ${i.page}`); }
     return;
   }
-  return send({ type: 'focus', id: i.id }).catch(() => setStatus('Page changed — check again.', true));
+  const occ = i.occ || [], o = occ[Math.min(occAt.get(i.id) || 0, Math.max(occ.length - 1, 0))];
+  return send({ type: 'focus', id: o ? o.id : i.id }).catch(() => setStatus('Page changed — check again.', true));
 }
 function step(d) {
   const rows = rowsNow();
@@ -190,7 +217,7 @@ function step(d) {
   render();
   $('#list .current')?.scrollIntoView({ block: 'nearest' });
 }
-for (const [k, sel] of Object.entries(VIEWS)) $(sel).onclick = () => { view = k; cursor = -1; render(); };
+for (const [k, sel] of Object.entries(VIEWS)) $(sel).onclick = () => { view = k; cursor = -1; occAt.clear(); render(); };
 $('#prev').onclick = () => step(-1);
 $('#next').onclick = () => step(1);
 
@@ -293,7 +320,7 @@ async function runScan({ keepView = false, fileGrant } = {}) {
     if (isPdf) res = await runPdf(fileGrant);
     else { await ensureInjected(); res = await send({ type: 'scan', ...options() }); }
     if (res?.error) throw new Error(res.error);
-    result = res; view = keepView ? view : 'bad'; cursor = -1; // after Ignore the person stays on the list they were working in
+    result = res; view = keepView ? view : 'bad'; cursor = -1; occAt.clear(); // after Ignore the person stays on the list they were working in
     setStatus('');
     render();
   } catch (e) {
@@ -310,6 +337,19 @@ $('#scan').onclick = () => {
   if (isPdf && /^file:/.test(tabUrl)) { try { fileGrant = Promise.resolve(api.permissions.request({ origins: ['file:///*'] })).catch(() => false); } catch { fileGrant = Promise.resolve(false); } }
   return runScan({ fileGrant });
 };
+// Stretch test: the page makes all text 35% longer for a moment, measures, and puts the text back.
+$('#stretch').onclick = async () => {
+  if (!result || result.kind === 'pdf') return;
+  $('#stretch').disabled = true;
+  setStatus('Stretch test…');
+  try {
+    const r = await send({ type: 'stretch', pct: 35 });
+    if (!r || r.error) throw new Error(r?.error || 'Page changed — check again.');
+    result = r; view = r.stats.layoutN ? 'layout' : view; cursor = -1; occAt.clear();
+    render();
+    setStatus(r.stretchFound ? `${r.stretchFound} ${r.stretchFound === 1 ? 'place breaks' : 'places break'} when the text is 35% longer (page text restored).` : 'Nothing breaks when the text is 35% longer (page text restored).');
+  } catch (e) { setStatus(String(e.message || e), true); } finally { $('#stretch').disabled = false; }
+};
 $('#clear').onclick = async () => { if (!isPdf) { try { await send({ type: 'clear' }); } catch {} } result = null; render(); setStatus(''); };
 
 // ---------- Settings drawer ----------
@@ -319,13 +359,49 @@ document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener(
 $('#settingsBtn').onclick = () => { const open = $('#settings').hidden; $('#settings').hidden = !open; $('#settingsBtn').setAttribute('aria-expanded', open); };
 
 // ---------- Never-flag lists (this site + all sites), import / export ----------
-async function addIgnore(term) {
+async function addIgnore(term, issue) {
   const list = host ? (ign.sites[host] = ign.sites[host] || []) : ign.global;
   if (!list.some((x) => x.toLowerCase() === term.toLowerCase())) list.push(term);
+  // learning: remember what was ignored and where; three similar Ignores make a rule (see learn.js)
+  if (L && mem && mem.on && issue) {
+    const r = L.record(mem, { text: term, host, slot: issue.slot || '' });
+    mem = r.mem; lastLearned = r.learned;
+    showLearned();
+    renderLearned();
+  }
   syncIgnoreBoxes();
   await save();
   runScan({ keepView: true });
 }
+function showLearned() {
+  $('#learnNote').hidden = !lastLearned.length;
+  if (!lastLearned.length) return;
+  $('#learnText').textContent = `Learned: skipping ${lastLearned.map((r) => L.describeRule(r, host)).join('; ')}.`;
+}
+$('#learnUndo').onclick = async () => {
+  for (const r of lastLearned) mem = L.reject(mem, r);
+  lastLearned = []; showLearned(); renderLearned();
+  await save();
+  runScan({ keepView: true });
+};
+function renderLearned() {
+  const box = $('#learnedList');
+  box.replaceChildren();
+  if (!L || !mem) { box.hidden = true; return; }
+  $('#learn').checked = mem.on;
+  const rules = mem.rules.filter((r) => r.scope === '*' || r.scope === host);
+  if (!rules.length) { box.append(el('li', 'empty', mem.on ? 'Nothing learned for this site yet.' : 'Learning is off.')); return; }
+  for (const r of rules) {
+    const li = el('li');
+    li.append(el('span', '', L.describeRule(r, host)));
+    const x = el('button', '', 'Remove');
+    x.title = 'Stop skipping these and don’t learn this again';
+    x.addEventListener('click', async () => { mem = L.reject(mem, r); renderLearned(); await save(); });
+    li.append(x);
+    box.append(li);
+  }
+}
+$('#learn').addEventListener('change', async () => { if (mem) { mem = { ...mem, on: $('#learn').checked }; renderLearned(); await save(); } });
 function syncIgnoreBoxes() {
   $('#ignoreGlobal').value = ign.global.join('\n');
   $('#ignoreSite').value = (ign.sites[host] || []).join('\n');
@@ -340,7 +416,7 @@ function download(name, mime, text) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
-$('#expIgnore').onclick = () => download('translation-check-ignore-list.json', 'application/json', JSON.stringify({ version: 1, ...ign }, null, 2));
+$('#expIgnore').onclick = () => download('translation-check-ignore-list.json', 'application/json', JSON.stringify({ version: 2, ...ign, learned: mem ? mem.rules : [] }, null, 2));
 $('#impIgnore').onclick = () => $('#impFile').click();
 $('#impFile').addEventListener('change', async () => {
   try {
@@ -348,6 +424,11 @@ $('#impFile').addEventListener('change', async () => {
     const clean = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()) : []);
     ign.global = [...new Set([...ign.global, ...clean(d.global)])];
     for (const [h, l] of Object.entries(d.sites || {})) ign.sites[h] = [...new Set([...(ign.sites[h] || []), ...clean(l)])];
+    if (L && mem && Array.isArray(d.learned)) { // version 2 files also carry learned rules
+      const have = new Set(mem.rules.map((r) => `${r.type}|${r.scope}|${r.value}`));
+      mem = L.loadMemory({ ...mem, rules: [...mem.rules, ...d.learned.filter((r) => r && !have.has(`${r.type}|${r.scope}|${r.value}`))] });
+      renderLearned();
+    }
     syncIgnoreBoxes(); await save(); setStatus('Ignore list imported.');
   } catch { setStatus('That file isn’t a valid ignore list.', true); }
   $('#impFile').value = '';
@@ -356,7 +437,9 @@ $('#impFile').addEventListener('change', async () => {
 // ---------- Export (CSV / HTML report) ----------
 const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const LABEL = { bad: 'Not translated', unsure: 'Can’t tell', bug: 'Broken text', fmt: 'Format hint' };
+const LABEL = { bad: 'Not translated', unsure: 'Can’t tell', bug: 'Broken text', fmt: 'Format hint', spell: 'Spelling', layout: 'Layout' };
+const places = (i) => (i.occurrences || []).map((o) => [o.where, o.selector].filter(Boolean).join(' — ')).join('\n');
+const nearText = (i) => { const o = (i.occurrences || [])[0]; return o && (o.before || o.after) ? `${o.before} [${i.text}] ${o.after}`.trim() : ''; };
 const where = (i) => (i.kind === 'pdf' ? `page ${i.pages && i.pages.length > 1 ? i.pages.join(', ') : i.page}` : i.kind === 'attr' ? i.attr + ' attribute' : 'text');
 const agree = (i) => (i.votes ? `${['tinyld', 'cld3', 'franc'].filter((k) => i.votes[k] === 'other').length}/3 models${i.confirmed ? ' (confirmed)' : ''}` : '');
 
@@ -370,17 +453,22 @@ async function getExport() {
 $('#expCsv').onclick = async () => {
   try {
     const d = await getExport();
-    const head = ['type', 'text', 'reason', 'detected language', 'model agreement', 'where', 'selector', 'document'];
-    const rows = d.issues.map((i) => [LABEL[i.verdict], i.text, i.reason, i.detected, agree(i), where(i), i.selector, d.url]);
+    // new columns go at the end, so existing spreadsheets and scripts that read the first eight keep working
+    const head = ['type', 'text', 'reason', 'detected language', 'model agreement', 'where', 'selector', 'document', 'occurrences', 'context', 'surrounding text', 'all locations', 'suggestion'];
+    const rows = d.issues.map((i) => [LABEL[i.verdict], i.text, i.reason, i.detected, agree(i), where(i), i.selector, d.url,
+      i.count || 1, i.context ? [i.context.kind, i.context.path].filter(Boolean).join(' · ') : '', nearText(i), places(i), i.fix || '']);
     download('translation-issues.csv', 'text/csv', '\ufeff' + [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n'));
   } catch (e) { setStatus(e.message, true); }
 };
 $('#expHtml').onclick = async () => {
   try {
     const d = await getExport();
-    const rows = d.issues.map((i) => `<tr><td>${esc(LABEL[i.verdict])}</td><td>${esc(i.text)}</td><td>${esc(i.reason)}${i.detected ? ' (' + esc(i.detected) + ')' : ''} ${esc(agree(i))}</td><td>${esc(where(i))}${i.selector ? '<br><code>' + esc(i.selector) + '</code>' : ''}</td></tr>`).join('');
+    const loc = (i) => (i.occurrences && i.occurrences.length
+      ? `<ol>${i.occurrences.map((o) => `<li>${esc(o.where || where(i))}${o.before || o.after ? `<br><i>${esc(o.before)} [${esc(i.text)}] ${esc(o.after)}</i>` : ''}${o.selector ? '<br><code>' + esc(o.selector) + '</code>' : ''}</li>`).join('')}</ol>`
+      : `${esc(where(i))}${i.selector ? '<br><code>' + esc(i.selector) + '</code>' : ''}`);
+    const rows = d.issues.map((i) => `<tr><td>${esc(LABEL[i.verdict])}</td><td>${esc(i.text)}${(i.count || 1) > 1 ? ` <b>×${i.count}</b>` : ''}</td><td>${esc(i.reason)}${i.detected ? ' (' + esc(i.detected) + ')' : ''} ${esc(agree(i))}${i.fix ? ' → <b>' + esc(i.fix) + '</b>' : ''}</td><td>${loc(i)}</td></tr>`).join('');
     download('translation-report.html', 'text/html', `<!doctype html><meta charset="utf-8"><title>Translation report</title>
-<style>body{font:14px system-ui;margin:24px;color:#14213d}table{border-collapse:collapse;width:100%}td,th{border:1px solid #dde3ec;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f1f4f9}code{font-size:12px}</style>
+<style>body{font:14px system-ui;margin:24px;color:#14213d}table{border-collapse:collapse;width:100%}td,th{border:1px solid #dde3ec;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f1f4f9}code{font-size:12px}ol{margin:0;padding-left:18px}i{color:#566176}</style>
 <h1>Translation report</h1><p><a href="${esc(d.url)}">${esc(d.title || d.url)}</a><br>Target language: <b>${esc(d.lang)}</b> · ${esc(d.generated)} · ${d.issues.length} issue(s)</p>
 <table><tr><th>Type</th><th>Text</th><th>Why</th><th>Where</th></tr>${rows}</table>`);
   } catch (e) { setStatus(e.message, true); }
@@ -411,7 +499,7 @@ $('#auto').addEventListener('change', async (e) => {
   }
 });
 
-for (const id of ['lang', 'attrs', 'unsure', 'related', 'verify', 'confirmed', 'live', 'source', 'hints']) $('#' + id).addEventListener('change', save);
+for (const id of ['lang', 'attrs', 'unsure', 'related', 'verify', 'confirmed', 'live', 'source', 'hints', 'spell', 'layout']) $('#' + id).addEventListener('change', save);
 document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', save));
 $('#hints').addEventListener('change', render);
 $('#verify').addEventListener('change', render);
@@ -431,6 +519,7 @@ async function refreshTab() {
   $('#auto').checked = !!host && autoSites.includes(host) && allowed;
   $('#ignoreSite').disabled = !host;
   syncIgnoreBoxes();
+  lastLearned = []; showLearned(); renderLearned();
   result = null; cursor = -1; render();
   if (isPdf) return; // PDFs are checked on demand
   try { // restore results if this page was already checked
@@ -452,13 +541,14 @@ if (api.sidePanel && !IS_PANEL) {
 }
 
 (async () => {
-  const d = await api.storage.local.get(['opts', 'ignore', 'autoSites']);
+  const d = await api.storage.local.get(['opts', 'ignore', 'autoSites', 'learn']);
   autoSites = d.autoSites || [];
+  if (L) mem = L.loadMemory(d.learn);
   ign = d.ignore || { global: d.opts?.ignore || [], sites: {} };
   const o = d.opts || {};
   setLang(o.lang || 'auto');
   const m = document.querySelector(`input[name=mode][value=${o.mode || 'balanced'}]`); if (m) m.checked = true;
-  for (const [k, id] of [['attrs', 'attrs'], ['unsure', 'unsure'], ['related', 'related'], ['verify', 'verify'], ['confirmedOnly', 'confirmed'], ['live', 'live'], ['source', 'source'], ['hints', 'hints']]) if (k in o) $('#' + id).checked = !!o[k];
+  for (const [k, id] of [['attrs', 'attrs'], ['unsure', 'unsure'], ['related', 'related'], ['verify', 'verify'], ['confirmedOnly', 'confirmed'], ['live', 'live'], ['source', 'source'], ['hints', 'hints'], ['spell', 'spell'], ['layout', 'layout']]) if (k in o) $('#' + id).checked = !!o[k];
   showModeHint();
   await refreshTab();
 })();
