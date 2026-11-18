@@ -30,7 +30,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
     i18n: { getUILanguage: () => 'en-US' },
     storage: { local: { get: async () => store, set: async (o) => Object.assign(store, o) } },
     tabs: { query: async () => [{ id: 5, url: tabUrl }], update: async (id, o) => updates.push([id, o]),
-      sendMessage: async (id, m) => { sent.push(m); const R = o.result || RESULT; return m.type === 'scan' ? R : m.type === 'stretch' ? (o.stretch || { error: 'Run a check first.' }) : m.type === 'status' ? { result: null } : m.type === 'export' ? (o.export || { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: R.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) }) : { ok: true }; },
+      sendMessage: async (id, m) => { sent.push(m); const R = o.result || RESULT; return m.type === 'scan' ? R : m.type === 'status' ? { result: null } : m.type === 'export' ? (o.export || { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: R.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) }) : { ok: true }; },
       onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
     scripting: { executeScript: async () => {}, registerContentScripts: async (a) => reg.push(...a), unregisterContentScripts: async () => {} },
     permissions: { request: (q) => { perms.push(q); return o.hold ? new Promise(() => {}) : Promise.resolve(permAnswer); }, remove: async (q) => { removed.push(q); return true; }, contains: async () => contains },
@@ -94,7 +94,7 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('popup: settings drawer is collapsed by default, language field is labelled', p.$('#settings').hidden && p.$('#result').hidden && /Page should be in/.test(p.$('.cap').textContent) && p.$('h1').textContent === 'Translation Check');
   p.$('#settingsBtn').click();
   t('popup: gear opens the settings drawer', !p.$('#settings').hidden && p.$('#settingsBtn').getAttribute('aria-expanded') === 'true');
-  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 5 && p.d.querySelectorAll('#settings .opt .d').length === 12 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
+  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 4 && p.d.querySelectorAll('#settings .opt .d').length === 10 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
   t('popup: drawer has strictness segments and the new model switches', p.d.querySelectorAll('input[name=mode]').length === 3 && p.$('#verify').checked && !p.$('#confirmed').checked);
   t('popup: side-panel button shown in popup', p.$('#openPanel').hidden === false);
   t('popup: button says "Check page" on web pages', p.$('#scanLabel').textContent === 'Check page');
@@ -183,6 +183,37 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   p.$('#scan').click(); await sleep(60);
   t('ignore: a fresh "Check page" still starts on Untranslated', p.$('#tabBad').getAttribute('aria-selected') === 'true');
 }
+// ---- Unclear → mark as untranslated (Ignore stays) ----
+{
+  const p = await boot(); p.$('#scan').click(); await sleep(50);
+  p.$('#tabUnsure').click();
+  const row = p.$('#list li');
+  t('mark: an unclear row has both "Untranslated" and "Ignore"', !!row.querySelector('.mark-btn') && row.querySelector('.mark-btn').textContent === 'Untranslated' && !!row.querySelector('.ignore-btn'));
+  p.$('#tabBad').click();
+  t('mark: untranslated rows have no "Untranslated" button', ![...p.d.querySelectorAll('#list .mark-btn')].some((b) => b.textContent === 'Untranslated'));
+  p.$('#tabUnsure').click();
+  p.$('#list .mark-btn').click(); await sleep(90);
+  const sc = p.sent.filter((m) => m.type === 'scan').pop();
+  t('mark: the re-check carries the marked text', sc.marked.includes('Lorem ipsum'), JSON.stringify(sc.marked));
+  t('mark: saved for this site', p.store.marked?.sites?.['shop.example.com']?.includes('Lorem ipsum'), JSON.stringify(p.store.marked));
+  t('mark: you stay on the Unclear tab, with a note', p.$('#tabUnsure').getAttribute('aria-selected') === 'true' && /moved to Untranslated/.test(p.$('#status').textContent), p.$('#status').textContent);
+  t('mark: shown in Settings › marked list', p.$('#markedSite').value === 'Lorem ipsum');
+  // ignoring a marked text takes it off the marked list (latest decision wins), and the other way round
+  p.$('#tabUnsure').click(); p.$('#list .ignore-btn').click(); await sleep(90);
+  t('mark: Ignore afterwards removes it from the marked list', !p.store.marked.sites['shop.example.com'].includes('Lorem ipsum') && p.store.ignore.sites['shop.example.com'].includes('Lorem ipsum'));
+  p.$('#tabUnsure').click(); p.$('#list .mark-btn').click(); await sleep(90);
+  t('mark: marking afterwards removes it from the ignore list', !p.store.ignore.sites['shop.example.com'].includes('Lorem ipsum') && p.store.marked.sites['shop.example.com'].includes('Lorem ipsum'));
+  p.$('#expIgnore').click(); await sleep(30);
+  t('mark: exported with the ignore list', p.downloads.some((d) => d.name === 'translation-check-ignore-list.json'));
+}
+{
+  const R = { ...RESULT, issues: [{ id: 9, verdict: 'bad', kind: 'text', text: 'Truecost', reason: 'Marked untranslated by you', marked: true, len: 8 }] };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: R, store: { marked: { global: [], sites: { 'shop.example.com': ['Truecost'] } } } });
+  p.$('#scan').click(); await sleep(50);
+  t('mark: a marked item offers Unmark next to Ignore', p.$('#list .mark-btn')?.textContent === 'Unmark' && !!p.$('#list .ignore-btn'));
+  p.$('#list .mark-btn').click(); await sleep(90);
+  t('mark: Unmark removes it and re-checks', !p.store.marked.sites['shop.example.com'].includes('Truecost') && !p.sent.filter((m) => m.type === 'scan').pop().marked.includes('Truecost'));
+}
 // ---- PDF in the browser's viewer ----
 {
   const p = await boot('popup.html', 'https://docs.example.org/files/handbook.pdf?download=1');
@@ -252,10 +283,10 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('panel: loads in side-panel mode (no side-panel button)', p.$('#openPanel').hidden === true && p.d.body.classList.contains('panel'));
 }
 
-// ---------- 2.0.6: grouped strings, context, learning, spelling/layout tabs, stretch test, exports ----------
+// ---------- 2.0.6: grouped strings, context, learning, exports ----------
 const G = {
   ...RESULT, score: 50,
-  stats: { ...RESULT.stats, badN: 4, unsureN: 0, bugN: 0, spellN: 1, layoutN: 1, learnedN: 6 },
+  stats: { ...RESULT.stats, badN: 4, unsureN: 0, bugN: 0, learnedN: 6 },
   issues: [
     { id: 10, verdict: 'bad', kind: 'text', text: 'Add to cart', detected: 'en', reason: 'Looks like English text', len: 33, count: 3, slot: 'button.cart-btn',
       context: { kind: 'button', path: 'Navigation “Main menu”' },
@@ -263,8 +294,6 @@ const G = {
         { id: 11, kind: 'text', where: 'button · Main › “Camiseta azul”', before: 'Algodón orgánico', after: '' },
         { id: 12, kind: 'text', where: 'button · Main › “Pantalón negro”', before: 'Corte recto', after: '' }] },
     { id: 13, verdict: 'bad', kind: 'text', text: 'SKU-1001', detected: 'en', reason: 'Detected as another language', len: 8, count: 1, occ: [{ id: 13, kind: 'text', where: 'text · Main', before: '', after: '' }] },
-    { id: 20, verdict: 'spell', kind: 'text', text: 'Recieve weekly updates', reason: 'Possible typo: “Recieve” → “Receive”', fix: 'Receive', word: 'Recieve', hint: 'typo', len: 22, count: 1, occ: [{ id: 20, kind: 'text', where: 'paragraph · Main', before: '', after: '' }] },
-    { id: 30, verdict: 'layout', kind: 'text', text: 'Configuración del sistema', reason: 'Cut off with “…” (40px hidden)', len: 25, count: 1, occ: [{ id: 30, kind: 'text', where: 'button · Sidebar', before: '', after: '' }] },
   ],
 };
 {
@@ -289,18 +318,14 @@ const G = {
   t('206 nav: other items have no copy buttons', !p.d.querySelectorAll('#list li.bad')[1].querySelector('.occnav'));
   p.d.querySelectorAll('#list li.bad > button:first-child')[0].click(); await sleep(20); // back to the group
   t('206 nav: coming back to a group resumes at the copy you were on', p.sent.filter((m) => m.type === 'focus').pop().id === 11 && /Copy 2 of 3/.test(p.$('#list li.bad .occnav')?.textContent), JSON.stringify([p.sent.filter((m) => m.type === 'focus').slice(-3), p.$('#list').textContent.slice(0, 300)]));
-  t('206 tabs: spelling and layout tabs appear with their counts', !p.$('#tabSpell').hidden && p.$('#tabSpell .n').textContent === '1' && !p.$('#tabLayout').hidden && p.$('#tabLayout .n').textContent === '1');
-  t('206 score: hints are not part of the score or the untranslated count', p.$('#score').textContent === '50%' && p.$('#nBad').textContent === '4');
+  t('removed: no spelling or layout tabs, no stretch button, no Quality settings', !p.$('#tabSpell') && !p.$('#tabLayout') && !p.$('#stretch') && !p.$('#spell') && !p.$('#layout'));
+  t('206 score: the score and the untranslated count', p.$('#score').textContent === '50%' && p.$('#nBad').textContent === '4');
   t('206 chips: rules learned from Ignore show how many texts they skipped', /6 auto-ignored/.test(chipsText(p)), chipsText(p));
-  p.$('#tabSpell').click();
-  t('206 spelling: the suggestion is shown, with Ignore for a word that is spelled right', /→ Receive/.test(p.$('#list').textContent) && /Recieve/.test(p.$('#list .ignore-btn').title));
-  p.$('#tabLayout').click();
-  t('206 layout: the problem is described; no Ignore button for layout', /Cut off with “…”/.test(p.$('#list').textContent) && !p.$('#list .ignore-btn'));
   // CSV keeps the first eight columns, adds the new ones at the end
   p.$('#expCsv').click(); await sleep(50);
   const csv = await readBlob(p.w, p.downloads.find((d) => d.size));
   const head = csv.replace(/^\ufeff/, '').split('\r\n')[0];
-  t('206 csv: original columns first, then occurrences, context, surrounding text, all locations, suggestion', head === '"type","text","reason","detected language","model agreement","where","selector","document","occurrences","context","surrounding text","all locations","suggestion"', head);
+  t('206 csv: original columns first, then occurrences, context, surrounding text, all locations', head === '"type","text","reason","detected language","model agreement","where","selector","document","occurrences","context","surrounding text","all locations"', head);
   t('206 csv: the grouped row has its count', /"Add to cart".*"3"/.test(csv));
 }
 {
@@ -330,17 +355,6 @@ const G = {
   p.$('#scan').click(); await sleep(60);
   p.$('#list .ignore-btn').click(); await sleep(80);
   t('206 learn: without learn.js, Ignore still saves the term and re-checks', JSON.stringify(p.store.ignore.sites['shop.example.com']) === '["Add to cart"]' && p.sent.filter((m) => m.type === 'scan').length === 2);
-}
-{
-  const stretched = { ...G, stretched: 35, stretchFound: 2, stats: { ...G.stats, layoutN: 2 } };
-  const p = await boot('popup.html', 'https://shop.example.com/x', { result: G, stretch: stretched });
-  t('206 stretch: the button is there', !!p.$('#stretch'));
-  p.$('#scan').click(); await sleep(60);
-  p.$('#stretch').click(); await sleep(60);
-  t('206 stretch: runs the test on the page and opens the Layout tab', p.sent.some((m) => m.type === 'stretch' && m.pct === 35) && p.$('#tabLayout').getAttribute('aria-selected') === 'true' && /2 places break/.test(p.$('#status').textContent), p.$('#status').textContent);
-  const q = await boot('popup.html', 'https://docs.example.org/files/handbook.pdf');
-  q.$('#scan').click(); await sleep(80);
-  t('206 stretch: hidden for PDFs', q.$('#stretch').hidden);
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

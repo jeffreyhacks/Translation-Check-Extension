@@ -1,5 +1,5 @@
-# Real Chromium, 2.0.6: grouped strings with their locations, context lines, Ignore that learns, spelling hints, layout check (real boxes)
-# and the stretch test (text 35% longer, then exactly restored). Usage: python test/e2e/v206.py
+# Real Chromium, 2.0.6: grouped strings with their locations, context lines, Ignore that learns, marked-untranslated texts,
+# own-language switching and live-update timing. Usage: python test/e2e/v206.py
 import http.server, socketserver, threading, time, json, sys, os, shutil, tempfile, pathlib
 from playwright.sync_api import sync_playwright
 ROOT = pathlib.Path(__file__).resolve().parents[2]; SITE = ROOT/'test'/'e2e'/'site'; SHOTS = ROOT/'test'/'e2e'/'shots'; SHOTS.mkdir(exist_ok=True)
@@ -50,33 +50,11 @@ with sync_playwright() as p:
     pop = ctx.new_page(); pop.on('pageerror', lambda e: errors.append('popup: ' + str(e)))
     pop.add_init_script(INIT % URL); pop.goto(f'chrome-extension://{ext}/popup.html'); pop.wait_for_selector('#langInput'); time.sleep(0.5)
 
-    # ---- English check: spelling + layout hints on a translated page, score unaffected
+    # ---- English check: a translated page scores 100%; spelling, layout and the stretch test are gone
     set_lang(pop, 'en'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
-    t('en: the page counts as fully translated (hints do not change the score)', pop.inner_text('#score') == '100%', pop.inner_text('#score'))
-    t('en: spelling tab is shown', pop.is_visible('#tabSpell'))
-    pop.click('#tabSpell'); time.sleep(0.2); sp = ' '.join(rows(pop))
-    t('en: the typo and the repeated word are found, with a suggestion', 'Receive' in sp and 'the the' in sp, sp)
-    t('en: layout tab is shown', pop.is_visible('#tabLayout'))
-    pop.click('#tabLayout'); time.sleep(0.2); lay = rows(pop); lj = ' '.join(lay); ls = snippets(pop)
-    t('layout: the fixed-width button text is cut off', any('Save all changes now' in r and 'Cut off' in r for r in lay), lay)
-    t('layout: the ellipsis sidebar link is "cut off with …"', any('Account notification' in r and '…' in r for r in lay), lay)
-    t('layout: the scroll area is not flagged', not any('scrolling box' in x for x in ls), ls)
-    t('layout: screen-reader-only text is not flagged', not any('Screen reader only' in x for x in ls), ls)
-    t('layout: exactly the two broken places are flagged (text that fits is not)', sorted(ls) == ['Account notification preferences', 'Save all changes now'], ls)
-    pop.screenshot(path=str(SHOTS/'v206-layout-tab.png'))
-
-    # ---- stretch test: finds what breaks only when longer, restores the page exactly
-    pop.click('#stretch'); time.sleep(0.5)
-    for _ in range(40):
-        if pop.evaluate("()=>!document.querySelector('#stretch').disabled"): break
-        time.sleep(0.25)
-    status = pop.inner_text('#status'); lay2 = rows(pop); ls2 = snippets(pop)
-    t('stretch: reports what breaks with 35% longer text', 'longer' in status and any('Export the report' in r and '35% longer' in r for r in lay2), (status, lay2))
-    t('stretch: only the tight button newly breaks; text with room to grow is fine', sorted(ls2) == ['Account notification preferences', 'Export the report', 'Save all changes now'], ls2)
-    time.sleep(1.2)
-    t('stretch: the page HTML is exactly as before', pg.evaluate('() => document.body.innerHTML') == original)
-    t('stretch: the page is still marked as checked (live mode did not re-run)', pop.inner_text('#score') == '100%')
-    pop.screenshot(path=str(SHOTS/'v206-stretch.png'))
+    t('en: the page counts as fully translated', pop.inner_text('#score') == '100%', pop.inner_text('#score'))
+    t('removed: no spelling or layout tabs and no +35% button', pop.locator('#tabSpell').count() == 0 and pop.locator('#tabLayout').count() == 0 and pop.locator('#stretch').count() == 0)
+    t('en: checking leaves the page HTML untouched', pg.evaluate('() => document.body.innerHTML') == original)
 
     # ---- Spanish check: everything English is untranslated; repeated strings grouped, with context
     set_lang(pop, 'es'); pop.click('#tabBad'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
@@ -112,7 +90,7 @@ with sync_playwright() as p:
     # ---- export: CSV has the new columns and all three locations
     with pop.expect_download() as dl: pop.click('#expCsv')
     csv = open(dl.value.path(), encoding='utf-8-sig').read()
-    t('export: CSV has occurrences and context columns', '"occurrences","context","surrounding text","all locations","suggestion"' in csv.splitlines()[0])
+    t('export: CSV has occurrences and context columns', '"occurrences","context","surrounding text","all locations"' in csv.splitlines()[0])
     line = next((l for l in csv.splitlines() if l.startswith('"Not translated","Add to cart"')), '')
     t('export: the grouped row lists 3 occurrences', ',"3",' in line, line[:200])
 
@@ -192,11 +170,73 @@ with sync_playwright() as p:
     sn = snippets(pop)
     t('hindi table: plain English titles are untranslated; "Review Pending" is labelled English', 'Payment Platform Migration' in sn and 'English' in next(r for r in rows(pop) if r.startswith('Review Pending')), rows(pop))
     pop.click('#tabUnsure'); time.sleep(0.2); un = snippets(pop)
-    t('hindi table: titles that may be names are listed as unclear, not counted as translated', all(x in un for x in ['Wisight Mapping', 'Inventory Management', 'Wisight Development', 'Trucost']), un)
+    t('hindi table: titles that may be names are listed as unclear, not counted as translated', all(x in un for x in ['Wisight Mapping', 'Wisight Sytems Developer', 'Wisight Development', 'Trucost']), un)
     t('hindi table: user IDs are not listed (counted as names)', not any(x in un + sn for x in ['jeffemployee', 'vasuemployee', 'jeffadmin']), un + sn)
+    pop.click('#tabBad'); time.sleep(0.2); sn = snippets(pop)
+    t('hindi table: "Inventory Management" and "Home IOT" are untranslated', 'Inventory Management' in sn and 'Home IOT' in sn, sn)
+    pop.click('#tabUnsure'); time.sleep(0.2); un = snippets(pop)
+    t('hindi table: BrandCase titles ("HomeIoT", "TrueCost") are listed, not skipped', 'HomeIoT' in un and 'TrueCost' in un, un)
     tips = pop.eval_on_selector_all('#list li > button:first-child', 'els => els.map(e => e.title)')
     t('tooltips are short (the reason only, no surrounding text)', all('\n' not in x and len(x) < 90 for x in tips), tips)
     t('no script errors on the page or in the popup', not errors, errors)
+    # ---- "Page's own language" follows the page: <html lang="en"> never changes, the app swaps its interface text from Hindi to English
+    A = B + '/app-switch.html'
+    pg.goto(A); pg.bring_to_front()
+    pop.evaluate("u => { window.__T = u; }", A); set_lang(pop, 'auto'); pop.click('#tabBad'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
+    chips = pop.eval_on_selector_all('#chips .chip', 'els => els.map(e => e.textContent.trim())')
+    t('own language: a page that says English but shows Hindi is checked as Hindi', 'Hindi' in chips and any('Page says English' in c for c in chips), chips)
+    t('own language: no "wrong target" banner, Hindi text is not flagged', not pop.is_visible('#mismatch') and not any('सत्र' in x for x in snippets(pop)), (pop.is_visible('#mismatch'), snippets(pop)[:5]))
+    pg.bring_to_front(); pg.click('#uiLang'); time.sleep(3.5)   # the user switches the app to English; no click in the extension
+    pop.bring_to_front(); time.sleep(0.3)
+    chips = pop.eval_on_selector_all('#chips .chip', 'els => els.map(e => e.textContent.trim())')
+    t('own language: switching the app to English re-checks as English by itself', 'English' in chips and not any('Page says' in c for c in chips), chips)
+    t('own language: and the English page has no untranslated text', pop.inner_text('#nBad') == '0', (pop.inner_text('#nBad'), snippets(pop)[:6]))
+    pop.screenshot(path=str(SHOTS/'v206-own-language.png'))
+    # ---- German dashboard: every copy of a project title is listed (cards and both tables), titles in the same column judged together
+    D = B + '/de-dashboard.html'
+    pg.goto(D); pg.bring_to_front()
+    pop.evaluate("u => { window.__T = u; }", D); set_lang(pop, 'de'); pop.click('#tabUnsure'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
+    pop.click('#tabUnsure'); time.sleep(0.2); un = rows(pop)
+    sk = next((r for r in un if r.startswith('Skill Scout')), '')
+    t('de dashboard: all three "Skill Scout" copies are one listed item (×3)', '×3' in sk, un)
+    t('de dashboard: "Hire Flow", "Wisight" and "Truecost" are listed', all(any(r.startswith(x) for r in un) for x in ['Hire Flow', 'Wisight', 'Truecost']), un)
+    t('de dashboard: "TrueCost" is its own row next to "Truecost"', any(r.startswith('TrueCost') for r in un) and any(r.startswith('Truecost') for r in un), un)
+    t('de dashboard: German text is not listed', not any(x in ' '.join(snippets(pop)) for x in ['Projektgesundheit', 'Aktualisiert', 'Kritisch', 'Übersicht']), snippets(pop))
+    # ---- Unclear → "Untranslated": the person decides; it moves to Untranslated, is highlighted, and stays there on the next check
+    n_bad = int(pop.inner_text('#nBad'))
+    pop.screenshot(path=str(SHOTS/'v206-mark.png'))
+    idx = next(i for i, r in enumerate(rows(pop)) if r.startswith('Truecost'))
+    pop.click(f'#list li:nth-child({idx + 1}) .mark-btn'); time.sleep(0.4); wait_idle(pop)
+    t('mark: "Truecost" leaves Unclear', not any(r.startswith('Truecost') for r in rows(pop)), rows(pop))
+    pop.click('#tabBad'); time.sleep(0.2); bad = rows(pop)
+    t('mark: and is listed under Untranslated (both copies, every spelling)', any(r.startswith('Truecost') and '×2' in r and 'Marked untranslated by you' in r for r in bad) and any(r.startswith('TrueCost') for r in bad) and int(pop.inner_text('#nBad')) > n_bad, bad)
+    hl = pg.evaluate("() => { for (const [k, h] of CSS.highlights) if (/-bad$/.test(k)) return [...h].map(r => r.toString()); return []; }")
+    t('mark: the copies are highlighted as untranslated on the page', hl.count('Truecost') == 2 and 'TrueCost' in hl, hl)
+    pop.click('#scan'); time.sleep(1); wait_idle(pop); pop.click('#tabBad'); time.sleep(0.2)
+    t('mark: still untranslated on a fresh check', any(r.startswith('Truecost') for r in rows(pop)), rows(pop))
+    idx = next(i for i, r in enumerate(rows(pop)) if r.startswith('Truecost'))
+    pop.click(f'#list li:nth-child({idx + 1}) .mark-btn'); time.sleep(0.4); wait_idle(pop)   # Unmark
+    pop.click('#tabUnsure'); time.sleep(0.2)
+    t('mark: Unmark puts it back under Unclear', any(r.startswith('Truecost') for r in rows(pop)), rows(pop))
+    # ---- Live updates: new text is checked within a second, also while a clock on the page ticks every 0.4 s
+    L = B + '/de-live.html'
+    pg.goto(L); pg.bring_to_front()
+    pop.evaluate("u => { window.__T = u; }", L); set_lang(pop, 'auto')
+    pop.evaluate("() => { for (const id of ['unsure', 'live']) { const c = document.getElementById(id); if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change')); } } }")
+    pop.click('#scan'); time.sleep(1); wait_idle(pop); pg.bring_to_front(); time.sleep(1.2)
+    HL = "t => { for (const [k, h] of CSS.highlights) if (/-(bad|unsure)$/.test(k)) for (const r of h) if (r.toString() === t) return true; return false; }"
+    def shown_after(txt):
+        pg.evaluate("t => window.addRow(t)", txt); t0 = time.time()
+        while time.time() - t0 < 5:
+            if pg.evaluate(HL, txt): return time.time() - t0
+            time.sleep(0.02)
+        return None
+    tick = [shown_after(f'Customer onboarding has not started yet {k}') for k in range(3)]
+    t('live: with a ticking clock, new English text is highlighted within 1 s (it used to wait until the page went quiet)', all(x is not None and x < 1.0 for x in tick), tick)
+    pg.evaluate("() => window.stopTick()"); time.sleep(1)
+    quiet = [shown_after(f'Quarterly revenue forecast is not ready {k}') for k in range(3)]
+    t('live: on a quiet page within 0.6 s (was 0.7 s of waiting)', all(x is not None and x < 0.6 for x in quiet), quiet)
+    t('live: the clock text itself is not listed', not any('Zuletzt aktualisiert' in x for x in snippets(pop)), snippets(pop)[:8])
     pg.goto(URL); time.sleep(0.3)
     ctx.close()
 print(f'\n2.0.6 e2e: {sum(res)} passed, {len(res)-sum(res)} failed'); sys.exit(0 if all(res) else 1)

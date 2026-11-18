@@ -1,13 +1,10 @@
-// 2.0.6: grouped strings with their locations, context capture, learned ignore rules, spelling/spacing hints, layout check and stretch test.
-// jsdom has no layout engine, so layout is measured here with stubbed boxes; test/e2e/layout.py checks it in real Chrome.
+// 2.0.6: grouped strings with their locations, context capture, learned ignore rules, marked-untranslated texts.
 import { loadNew, loadBg, page, sleep } from './harness.mjs';
 import fs from 'fs';
 import { mask } from '../src/mask.js';
 import { JSDOM } from 'jsdom';
 import * as learn from '../src/learn.js';
 import { describe, slotOf } from '../src/context.js';
-import { spellHints } from '../src/spell.js';
-import { layoutProblem, stretchText } from '../src/layout.js';
 
 let pass = 0, fail = 0;
 const t = (name, cond, extra = '') => { if (cond) pass++; else fail++; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : '  ' + extra}`); };
@@ -98,60 +95,11 @@ const SHOP = page(`
   t('context: never throws on odd input', describe(null, d.body).kind === 'text');
 }
 
-// ---------- spelling / spacing ----------
+// ---------- spelling, layout and the stretch test were removed: old saved settings that still ask for them change nothing ----------
 {
-  const hits = { 'Recieve updates from the team': 'typo', 'Save the the changes': 'repeat', 'Addto cart': 'join', 'Cancel,save or close': 'space', 'Done.Next step is review': 'space', 'Your session was succesful': 'typo' };
-  for (const [s, type] of Object.entries(hits)) t(`spell: "${s}" -> ${type}`, spellHints(s, 'en').some((h) => h.type === type), JSON.stringify(spellHints(s, 'en')));
-  const clean = ['Node.js, e.g. version 3.5', 'Welcome back, admin', 'Sign up for our newsletter', 'Roleplay trainer for HubSpot and Salesforce teams', 'Upskilling coachable reps',
-    'Manage scenarios, personas, rubrics and system configuration', 'Had had enough', 'Login with SSO', 'Onboarding checklist', 'Katalyst Arena dashboard', 'Leaderboards'];
-  t('spell: clean English gets no hints', clean.every((s) => !spellHints(s, 'en').length), JSON.stringify(clean.map((s) => spellHints(s, 'en'))));
-  t('spell: other languages only get the spacing rules, never typos', !spellHints('Änderungen speichern', 'de').length && !spellHints('Velkommen tilbage', 'da').length && spellHints('Guardar,cancelar', 'es').some((h) => h.type === 'space'));
-  t('spell: no-space scripts are skipped', !spellHints('設定を保存,設定', 'ja').length);
-}
-{
-  const html = page(`<main><h1>Welcome to the dashboard</h1><p>Recieve weekly updates about your the the team performance.</p><button>Addto cart</button><p>Contact Maria Müller for help.</p></main>`, 'en');
-  const r = await scan(loadNew(html), { lang: 'en' });
-  const sp = r.issues.filter((i) => i.verdict === 'spell');
-  t('page: spelling hints are found on translated text', sp.length >= 3 && sp.some((i) => i.fix === 'Receive') && sp.some((i) => i.hint === 'join'), JSON.stringify(sp.map((i) => [i.reason, i.fix])));
-  t('page: spelling hints never change the score', r.score === 100 && r.stats.badN === 0, JSON.stringify(r.stats));
-  const off = await scan(loadNew(html), { lang: 'en', spell: false });
-  t('page: spelling can be switched off', !off.issues.some((i) => i.verdict === 'spell') && off.score === r.score);
-  const es = await scan(loadNew(SHOP));
-  t('page: untranslated text gets no spelling hints (it is already a warning)', !es.issues.some((i) => i.verdict === 'spell'));
-}
-
-// ---------- layout (stubbed boxes) ----------
-{
-  const w = new JSDOM(`<div id="box"><span id="s">A very long label that does not fit</span></div><div id="sc"><span id="t">Scrollable text here</span></div>`).window;
-  const box = w.document.getElementById('box'), sc = w.document.getElementById('sc');
-  const style = { box: { display: 'block', overflowX: 'hidden', overflowY: 'hidden', textOverflow: 'ellipsis' }, sc: { display: 'block', overflowX: 'auto', overflowY: 'hidden', textOverflow: 'clip' } };
-  const real = w.getComputedStyle.bind(w);
-  w.getComputedStyle = (e) => (e.id === 'box' ? style.box : e.id === 'sc' ? style.sc : { ...real(e), display: e.tagName === 'SPAN' ? 'inline' : 'block' });
-  for (const [e, wd] of [[box, 100], [sc, 100]]) {
-    Object.defineProperty(e, 'clientWidth', { get: () => wd }); Object.defineProperty(e, 'clientHeight', { get: () => 20 });
-    e.getBoundingClientRect = () => ({ left: 0, top: 0, right: wd, bottom: 20, width: wd, height: 20 });
-  }
-  w.Range.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, right: 180, bottom: 18, width: 180, height: 18 });
-  const p = layoutProblem(w.document.getElementById('s').firstChild);
-  t('layout: text wider than a clipping box is "cut off with …"', p && p.kind === 'clip' && p.ellipsis && p.px === 80, JSON.stringify(p));
-  t('layout: a scroll area is never flagged', layoutProblem(w.document.getElementById('t').firstChild) === null);
-  w.Range.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, right: 90, bottom: 18, width: 90, height: 18 });
-  t('layout: text that fits is fine', layoutProblem(w.document.getElementById('s').firstChild) === null);
-  w.Range.prototype.getBoundingClientRect = () => ({ left: 300, top: 0, right: 480, bottom: 18, width: 180, height: 18 });
-  t('layout: text entirely outside a clipping box (hidden slide) is not "cut"', layoutProblem(w.document.getElementById('s').firstChild) === null);
-  t('layout: stretch keeps word breaks and lengthens by the percentage', stretchText('Save changes', 35) === 'Savesa changescha' && stretchText('OK', 35) === 'OKo');
-}
-{
-  const html = page(`<main><p>Texto completamente traducido al español para la prueba.</p><button>Guardar cambios</button></main>`, 'es');
-  const h = loadNew(html);
-  await scan(h, { live: true });
-  const before = h.w.document.body.innerHTML;
-  const r = await h.call({ type: 'stretch', pct: 35 });
-  await sleep(900);
-  t('stretch: the page text is exactly restored', h.w.document.body.innerHTML === before);
-  t('stretch: returns a full result (nothing breaks without a layout engine)', r && r.stats && r.stretched === 35 && r.stretchFound === 0, JSON.stringify(r && { s: r.stretched, f: r.stretchFound }));
-  t('stretch: live mode does not re-check because of the test', h.bgCalls.results === 0, String(h.bgCalls.results));
-  t('stretch: without a check first it says so', (await loadNew(html).call({ type: 'stretch', pct: 35 })).error === 'Run a check first.');
+  const html = page(`<main><h1>Welcome to the dashboard</h1><p>Recieve weekly updates about your the the team performance.</p><button>Addto cart</button></main>`, 'en');
+  const r = await scan(loadNew(html), { lang: 'en', spell: true, layout: true });
+  t('removed: no spelling or layout items, and the score is unchanged', !r.issues.some((i) => i.verdict === 'spell' || i.verdict === 'layout') && r.score === 100 && !('spellN' in r.stats) && !('layoutN' in r.stats), JSON.stringify([r.issues.map((i) => i.verdict), r.stats]));
 }
 
 // ---------- reported: 3/3 models said "not Hindi" but it was listed under Unclear ("Not confirmed by a second model") ----------
@@ -194,6 +142,27 @@ const SHOP = page(`
   t('focus: the mark goes away by itself after a few seconds', !focusKey());
 }
 
+// ---------- reported: German dashboard and sessions: titles hidden by their section or the page average; one of three "Skill Scout" copies listed ----------
+{
+  const d = await scan(loadNew(fs.readFileSync('test/e2e/site/de-dashboard.html', 'utf8')), { lang: 'de' });
+  const by = (r, x) => r.issues.find((i) => i.text === x);
+  t('de dashboard: all three "Skill Scout" copies are listed together', by(d, 'Skill Scout')?.count === 3, JSON.stringify(by(d, 'Skill Scout')));
+  { // marked untranslated by the user: every copy is listed as untranslated, case-insensitive, and the score follows
+    const m = await scan(loadNew(fs.readFileSync('test/e2e/site/de-dashboard.html', 'utf8')), { lang: 'de', marked: ['truecost', 'Hire Flow'] });
+    const tc = m.issues.find((i) => i.text === 'Truecost'), hf = m.issues.find((i) => i.text === 'Hire Flow');
+    t('marked: "Truecost" and "Hire Flow" move to untranslated (every copy), with the reason shown', tc?.verdict === 'bad' && tc.count === 2 && tc.marked && hf?.verdict === 'bad' && hf.count === 2 && /Marked untranslated by you/.test(tc.reason), JSON.stringify(m.issues.map((i) => [i.verdict, i.text, i.count])));
+    t('marked: no copy is left under unclear', !m.issues.some((i) => i.verdict === 'unsure' && /^(Truecost|Hire Flow)$/.test(i.text)));
+    t('marked: the score counts every copy as untranslated (Truecost ×2, TrueCost ×1, Hire Flow ×2)', m.stats.badN === d.stats.badN + 5 && m.stats.unsureN === d.stats.unsureN - 5 && m.issues.find((i) => i.text === 'TrueCost')?.verdict === 'bad', JSON.stringify([m.stats, d.stats]));
+    t('marked: other items are unchanged', m.issues.find((i) => i.text === 'Skill Scout')?.verdict === d.issues.find((i) => i.text === 'Skill Scout')?.verdict);
+  }
+  t('de dashboard: "Truecost" (×2) and "TrueCost" (×1) are separate rows, each spelling shown as written', by(d, 'Truecost')?.count === 2 && by(d, 'TrueCost')?.count === 1 && by(d, 'TrueCost')?.occ.length === 1, JSON.stringify(d.issues.map((i) => [i.verdict, i.text, i.count])));
+  t('de dashboard: "Hire Flow", "Wisight", "Truecost" are listed (every copy)', by(d, 'Hire Flow')?.count === 2 && by(d, 'Wisight')?.count === 2 && by(d, 'Truecost')?.count === 2, JSON.stringify(d.issues.map((i) => [i.verdict, i.text, i.count])));
+  const s2 = await scan(loadNew(fs.readFileSync('test/e2e/site/de-sessions.html', 'utf8')), { lang: 'de' });
+  const want = ['HomeIoT', 'Home IOT', 'Wisight Mapping', 'Wisight Sytems Developer', 'Inventory Management', 'Trucost', 'TrueCost', 'Wisight Development', 'Payment Platform Migration'];
+  t('de sessions: every English session title is listed (untranslated or unclear)', want.every((x) => by(s2, x)), want.filter((x) => !by(s2, x)).join(', '));
+  t('de sessions: German text is not flagged', !s2.issues.some((i) => /Sitzung|beantwortet|Ausstehend|Abgeschlossen/.test(i.text)), JSON.stringify(s2.issues.map((i) => i.text)));
+}
+
 // ---------- a copy whose extension was reloaded stops for good (it can no longer touch the new copy's marks) ----------
 {
   const html = page('<main><p>Texto traducido al español para la prueba de copias antiguas.</p><p id="x">Guardar cambios</p></main>', 'es');
@@ -210,14 +179,15 @@ const SHOP = page(`
   const r = await scan(loadNew(fs.readFileSync('test/e2e/site/hi-sessions.html', 'utf8')), { lang: 'hi' });
   const by = (x) => r.issues.find((i) => i.text === x);
   t('hi table: "Review Pending" is labelled English (its wording), not Indonesian', by('Review Pending')?.detected === 'en', JSON.stringify(by('Review Pending')));
-  t('hi table: titles that may be names are listed as unclear, with a reason', ['Wisight Mapping', 'Inventory Management', 'Wisight Development', 'Trucost'].every((x) => by(x)?.verdict === 'unsure' && /Name or title/.test(by(x).reason)), JSON.stringify(r.issues.map((i) => [i.verdict, i.text])));
+  t('hi table: titles that may be names are listed as unclear, with a reason', ['Wisight Mapping', 'Wisight Sytems Developer', 'Wisight Development', 'Trucost', 'HomeIoT', 'TrueCost'].every((x) => by(x)?.verdict === 'unsure' && /Name or title/.test(by(x).reason)), JSON.stringify(r.issues.map((i) => [i.verdict, i.text])));
+  t('hi table: English titles made of dictionary words are untranslated ("Inventory Management", "Home IOT")', by('Inventory Management')?.verdict === 'bad' && by('Home IOT')?.verdict === 'bad', JSON.stringify([by('Inventory Management'), by('Home IOT')]));
   t('hi table: plain English stays untranslated', by('Payment Platform Migration')?.verdict === 'bad' && by('AI/ML Engineer Knowledge Capture – Document Test')?.count === 2);
   t('hi table: Latin text is never "assumed translated" on a page in another script', r.stats.assumedN === 0, JSON.stringify(r.stats));
   t('hi table: account IDs are counted as names, not listed', !r.issues.some((i) => /employee|jeffadmin/.test(i.text) && i.verdict !== 'bad') && r.stats.nameN >= 5, JSON.stringify(r.stats));
   const w = await scan(loadNew(page('<main><p>यहाँ आपके सभी प्रशिक्षण सत्र और उनकी स्थिति दिखाई देती है।</p><p>ahora</p><p>cancelar</p><p>jeffadmin</p></main>', 'hi')), { lang: 'hi' });
   t('hi page: foreign words ("ahora", "cancelar") are still listed; only real IDs count as names', ['ahora', 'cancelar'].every((x) => w.issues.some((i) => i.text === x)) && !w.issues.some((i) => i.text === 'jeffadmin'), JSON.stringify(w.issues.map((i) => i.text)));
-  const es = await scan(loadNew(page('<main><p>Texto traducido al español para la prueba.</p><p>Inventory Management</p></main>', 'es')), { lang: 'es' });
-  t('latin pages unchanged: a capitalised English title on a Spanish page is handled as before', JSON.stringify(es.stats).length > 0 && !es.issues.some((i) => /Name or title/.test(i.reason || '')));
+  const es = await scan(loadNew(page('<main><p>Texto traducido al español para la prueba de títulos en inglés.</p><p>Inventory Management</p><p>Wisight Mapping</p></main>', 'es')), { lang: 'es' });
+  t('latin pages: English titles on a Spanish page are listed, never assumed translated', ['Inventory Management', 'Wisight Mapping'].every((x) => es.issues.some((i) => i.text === x)), JSON.stringify(es.issues.map((i) => [i.verdict, i.text])));
 }
 
 console.log(`\n2.0.6 features: ${pass} passed, ${fail} failed`);

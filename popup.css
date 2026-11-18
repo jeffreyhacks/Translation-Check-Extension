@@ -1,7 +1,7 @@
 :root{
   color-scheme:light dark;
   --ink:#14213d; --muted:#566176; --bg:#fff; --panel:#f3f5f9; --line:#e3e7ee; --accent:#14213d;
-  --ok:#1f9d6b; --bad:#d7263d; --unsure:#3b6df0; --bug:#9b3fd0; --fmt:#0f9d8a; --spell:#e07a00; --layout:#c2410c; --mark:#ffe14d; --track:#e6eaf1;
+  --ok:#1f9d6b; --bad:#d7263d; --unsure:#3b6df0; --bug:#9b3fd0; --fmt:#0f9d8a; --mark:#ffe14d; --track:#e6eaf1;
 }
 @media (prefers-color-scheme:dark){
   :root{--ink:#e8edf7; --muted:#8e9ab1; --bg:#12182a; --panel:#1b2339; --line:#2b3552; --track:#2b3552; --accent:#e8edf7; --mark:#b89b00}
@@ -93,7 +93,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visi
 .tabs .lbl{font-size:12px}
 .tabs .n{font-size:12px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--c)}
-.dot.bad{--c:var(--bad)} .dot.unsure{--c:var(--unsure)} .dot.bug{--c:var(--bug)} .dot.fmt{--c:var(--fmt)} .dot.spell{--c:var(--spell)} .dot.layout{--c:var(--layout)}
+.dot.bad{--c:var(--bad)} .dot.unsure{--c:var(--unsure)} .dot.bug{--c:var(--bug)} .dot.fmt{--c:var(--fmt)}
 .nav{display:flex;align-items:center;gap:4px;margin-top:6px;color:var(--muted)}
 .nav .spacer{flex:1}
 #pos{min-width:44px;text-align:center;font-size:12px}
@@ -104,7 +104,7 @@ body.panel ul{max-height:none}
 li{display:flex;align-items:stretch;gap:4px}
 li>button:first-child{flex:1;min-width:0;display:grid;gap:3px;text-align:left;padding:8px 10px;border-radius:10px;background:var(--panel);border-left:3px solid var(--c)}
 li>button:first-child:hover{background:var(--track)}
-li.bad{--c:var(--bad)} li.unsure{--c:var(--unsure)} li.bug{--c:var(--bug)} li.fmt{--c:var(--fmt)} li.spell{--c:var(--spell)} li.layout{--c:var(--layout)}
+li.bad{--c:var(--bad)} li.unsure{--c:var(--unsure)} li.bug{--c:var(--bug)} li.fmt{--c:var(--fmt)}
 li.current>button:first-child{outline:2px solid var(--c);outline-offset:-2px}
 .snippet{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .meta{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11px}
@@ -114,8 +114,11 @@ li.current>button:first-child{outline:2px solid var(--c);outline-offset:-2px}
 .pip.other{background:var(--bad)} .pip.target{background:var(--ok)}
 .pips.confirmed{color:var(--ok)}
 .check{width:11px;height:11px;color:var(--ok)}
-li .ignore-btn{align-self:center;padding:4px 6px;border-radius:8px;color:var(--muted);font-size:11px}
-li .ignore-btn:hover{background:var(--panel);color:var(--ink)}
+li .acts{display:flex;flex-direction:column;justify-content:center;gap:2px}
+li .ignore-btn,li .mark-btn{padding:4px 6px;border-radius:8px;color:var(--muted);font-size:11px;white-space:nowrap}
+li .ignore-btn:hover,li .mark-btn:hover{background:var(--panel);color:var(--ink)}
+li .mark-btn{color:var(--bad)}
+.ignore h3.sub{margin:8px 0 2px;font-size:11px;font-weight:600;color:var(--muted)}
 .empty{padding:14px;text-align:center;color:var(--muted)}
 
 /* searchable language picker (native list ignores the theme, so this one is themed explicitly) */
@@ -175,7 +178,7 @@ body.picking{min-height:330px}
 .learned li.empty{background:none;padding:0 2px}
 .has-occ{flex-wrap:wrap}
 .has-occ>button:first-child{flex:1 1 0}
-.has-occ .ignore-btn{order:2}
+.has-occ .acts{order:2}
 .occnav{order:3;flex-basis:100%;display:flex;align-items:center;justify-content:center;gap:6px;margin-top:-2px;color:var(--muted);font-size:11px}
 .occnav .icon.sm{width:24px;height:24px;font-size:16px;line-height:1}
 .occpos{min-width:84px;text-align:center}
