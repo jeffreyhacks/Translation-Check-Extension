@@ -1,4 +1,4 @@
-# Translation Check 2.0.6
+# Translation Check 2.0.7
 
 A Chrome extension for localization QA. It checks whether a web page, or a PDF open in the browser, is fully in the language you expect,
 and highlights the text that isn't: leftover English on a German page, Danish on a Dutch page, a translation key such as
@@ -42,9 +42,22 @@ list and rules learned from it; each is exported with its reason. A legend above
 
 ### On the page
 Untranslated text keeps its yellow highlight and red wavy underline; unclear text gets an orange wavy underline (with *Mark unclear text*,
-on by default). Point at underlined text to see a small card with the reason and how many models read another language, and decide there:
-**Not translated** (unclear text: listed as untranslated on every check of the site), **OK** (put on this site's ignore list) or **Unmark**.
+on by default). The wavy underlines are only on the page: the popup's legend shows the same colours as plain dots, like the tabs.
+
+With *Card on underlined text* (Settings › On the page, on by default) pointing at underlined text shows a small card with the reason
+and how many models read another language, and you can decide there:
+- **Not translated** (unclear text): listed as untranslated on every check of the site.
+- **OK** on text you marked as untranslated: undoes your mark, so it goes back to **Unclear** (or to what the models said) with its
+  orange underline.
+- **OK** on anything else: the text is put on this site's ignore list and listed as **Ignored** (*OK’d by you*, with what the models read).
+
+OK never makes text *translated*. The Translated count only counts text in the page's language, and text the models read as untranslated
+still counts against the percentage after you OK it: it is still English on the page, it just isn't listed as a problem any more.
 The decision goes into the same lists as the popup's buttons, the page is checked again, and an open popup or side panel follows.
+With the card switched off, decide with the buttons on each row in the popup; switching it on or off applies to the checked page at once.
+
+Tab counts are rows in the list (the same text in several places is one row, ×N), the same number the **‹ ›** navigator steps through;
+the big numbers next to the score count every place on the page.
 
 ### Repeated text
 The same text with the same verdict is one row, marked **×N**. Click it again (or use **‹ ›** under it, *Copy 2 of 3*) to visit each place it
@@ -55,7 +68,8 @@ appears; returning to a row resumes at the copy you were on. The page marks the 
 Every row under **Unclear** has two buttons:
 - **Untranslated** moves every copy of the text (capitals ignored) to **Untranslated**, highlights it and counts it in the score, with the
   reason *Marked untranslated by you*. It stays untranslated on every later check of the site. **Unmark** on that row undoes it.
-- **Ignore** stops the text from being flagged on this site. Rows under Untranslated have **Ignore** too.
+- **Ignore** stops the text from being flagged on this site. Rows under Untranslated have **Ignore** too. Like **OK** on the page, it
+  lists the text as Ignored and never counts it as translated.
 
 The latest choice wins: marking an ignored text removes it from the ignore list, and the other way round.
 
@@ -92,6 +106,7 @@ learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
 | | **Confirmed warnings only** | Shows only warnings that at least two models back. |
 | | **Accept related languages** | Treats close relatives (Spanish/Portuguese, Danish/Norwegian) as the target. |
 | On the page | **Placeholders & tooltips** | Also checks alt text, placeholders, titles and accessible labels. |
+| | **Card on underlined text** | Shows a card with the reason and decision buttons when pointing at underlined text on the page (on by default). |
 | | **Mark unclear text** | Underlines unclear text on the page in orange (on by default). |
 | | **Live updates** | Checks text that appears or changes after the check. |
 | | **Compare with source language** | Flags text identical to the page's English (`hreflang`) version. |

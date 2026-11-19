@@ -45,7 +45,7 @@ function setStatus(msg, err = false) { $('#status').textContent = msg; $('#statu
 const lines = (s) => s.split('\n').map((x) => x.trim()).filter(Boolean);
 const mode = () => document.querySelector('input[name=mode]:checked')?.value || 'balanced';
 const storable = () => ({ unclearMarks: 2, lang: $('#lang').value, mode: mode(), attrs: $('#attrs').checked, unsure: $('#unsure').checked, related: $('#related').checked,
-  verify: $('#verify').checked, confirmedOnly: $('#confirmed').checked, live: $('#live').checked, source: $('#source').checked, hints: $('#hints').checked });
+  verify: $('#verify').checked, confirmedOnly: $('#confirmed').checked, live: $('#live').checked, source: $('#source').checked, hints: $('#hints').checked, hoverCard: $('#hoverCard').checked });
 const learnedRules = () => (L && mem && mem.on ? L.rulesFor(mem, host) : []);
 const options = () => ({ ...storable(), ignore: [...ign.global, ...(ign.sites[host] || [])], learned: learnedRules(), marked: [...marked.global, ...(marked.sites[host] || [])] });
 const save = () => api.storage.local.set({ opts: storable(), ignore: ign, marked, autoSites, ...(mem ? { learn: mem } : {}) });
@@ -108,9 +108,9 @@ function renderCoverage() {
   const scanned = s.scannedN ?? ((s.okN || 0) + (s.badN || 0) + (s.unsureN || 0) + (s.bugN || 0) + (s.nameN || 0) + (s.skipN || 0));
   box.hidden = !scanned || result.kind === 'pdf';
   if (box.hidden) return;
-  const part = (n, label) => `<b>${n || 0}</b> ${label}`;
-  box.innerHTML = [part(scanned, 'scanned'), part(s.okN, 'translated'), part(s.badN, 'not translated'), part(s.unsureN, 'unclear'),
-    ...(s.bugN ? [part(s.bugN, 'broken')] : []), part((s.nameN || 0) + (s.skipN || 0), 'ignored')].join(' · ');
+  const part = (cls, n, label) => `<span class="${cls}">${cls ? '<i></i>' : ''}<b>${n || 0}</b> ${label}</span>`;
+  box.innerHTML = [part('', scanned, 'scanned'), part('ok', s.okN, 'translated'), part('bad', s.badN, 'not translated'), part('unsure', s.unsureN, 'unclear'),
+    ...(s.bugN ? [part('bug', s.bugN, 'broken')] : []), part('skip', (s.nameN || 0) + (s.skipN || 0), 'ignored')].join('');
   box.title = 'Every text item on the page is in exactly one of these. Ignored: names, codes, technical terms, dates and your ignore list (listed with their reason in the CSV).';
 }
 
@@ -137,14 +137,20 @@ function render() {
     $('#mismatchFix').onclick = () => { setLang(fix); save().then(() => runScan()); };
   }
 
-  const counts = { bad: stats.badN, unsure: stats.unsureN, bug: stats.bugN, fmt: stats.fmtN };
+  // Tab counts are rows in the list, the same number the navigator steps through ("0 / 23"); the same text in several places is one row (×N).
+  // The big numbers above count every place on the page.
+  const places = { bad: stats.badN, unsure: stats.unsureN, bug: stats.bugN, fmt: stats.fmtN };
+  const counts = Object.fromEntries(Object.keys(places).map((k) => [k, (result.issues || []).filter((i) => i.verdict === k).length]));
   $('#tabBug').hidden = !stats.bugN;
   $('#tabFmt').hidden = !$('#hints').checked && !stats.fmtN;
   if ($(VIEWS[view]).hidden) view = 'bad';
   for (const [k, sel] of Object.entries(VIEWS)) {
     $(sel).setAttribute('aria-selected', k === view);
     $(sel).querySelector('.n').textContent = counts[k] || 0;
+    $(sel).dataset.places = places[k] || 0;
+    $(sel).title = `${$(sel).dataset.label || ($(sel).dataset.label = $(sel).title)}: ${counts[k] || 0} ${counts[k] === 1 ? 'row' : 'rows'}, ${places[k] || 0} ${places[k] === 1 ? 'place' : 'places'} on the page`;
   }
+  $('#legendTip').textContent = $('#hoverCard').checked ? 'Point at underlined text on the page to decide' : 'Decide with the buttons on each row below';
 
   const list = $('#list');
   list.replaceChildren();
@@ -550,7 +556,9 @@ $('#auto').addEventListener('change', async (e) => {
   }
 });
 
-for (const id of ['lang', 'attrs', 'unsure', 'related', 'verify', 'confirmed', 'live', 'source', 'hints']) $('#' + id).addEventListener('change', save);
+for (const id of ['lang', 'attrs', 'unsure', 'related', 'verify', 'confirmed', 'live', 'source', 'hints', 'hoverCard']) $('#' + id).addEventListener('change', save);
+// the card on underlined text is switched on or off on the checked page right away, without checking it again
+$('#hoverCard').addEventListener('change', () => { if (result && result.kind !== 'pdf') send({ type: 'tc-hovercard', on: $('#hoverCard').checked }).catch(() => {}); if (result) render(); });
 document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', save));
 $('#hints').addEventListener('change', render);
 $('#verify').addEventListener('change', render);
@@ -608,7 +616,7 @@ if (api.sidePanel && !IS_PANEL) {
   setLang(o.lang || 'auto');
   const m = document.querySelector(`input[name=mode][value=${o.mode || 'balanced'}]`); if (m) m.checked = true;
   if (o.unclearMarks !== 2) o.unsure = true; // 2.0.6: unclear text is underlined in orange by default (switched on once for existing settings)
-  for (const [k, id] of [['attrs', 'attrs'], ['unsure', 'unsure'], ['related', 'related'], ['verify', 'verify'], ['confirmedOnly', 'confirmed'], ['live', 'live'], ['source', 'source'], ['hints', 'hints']]) if (k in o) $('#' + id).checked = !!o[k];
+  for (const [k, id] of [['attrs', 'attrs'], ['unsure', 'unsure'], ['related', 'related'], ['verify', 'verify'], ['confirmedOnly', 'confirmed'], ['live', 'live'], ['source', 'source'], ['hints', 'hints'], ['hoverCard', 'hoverCard']]) if (k in o) $('#' + id).checked = !!o[k];
   showModeHint();
   if (d.opts && o.unclearMarks !== 2) save(); // keep the switched-on setting for automatic checks too
   await refreshTab();

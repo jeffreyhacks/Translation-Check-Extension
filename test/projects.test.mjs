@@ -89,7 +89,7 @@ const NAMES = ['Truecost', 'Testproj123', 'Customer Support Hub', 'Skill Scout',
   t('hover: "OK" puts the text on this site\'s ignore list and it is no longer listed', store.ignore.sites['knowledge-harvestor.artisanscloud.com'].includes('Testproj123') && !st2.result.issues.some((i) => i.text === 'Testproj123'), JSON.stringify(store.ignore));
   t('hover: the earlier mark is kept', st2.result.issues.find((i) => i.text === 'Smart Service Analytics')?.marked);
   const ex = await h.call({ type: 'export' });
-  t('export: the OK\'d text is listed as ignored, with the reason', ex.issues.some((i) => i.text === 'Testproj123' && i.verdict === 'skip' && /ignore list/.test(i.reason)), JSON.stringify(ex.issues.filter((i) => i.verdict === 'skip').map((i) => [i.text, i.reason])));
+  t('export: the OK\'d text is listed as ignored, with the reason', ex.issues.some((i) => i.text === 'Testproj123' && i.verdict === 'skip' && /^OK’d by you \(the models read it as unclear/.test(i.reason)), JSON.stringify(ex.issues.filter((i) => i.verdict === 'skip').map((i) => [i.text, i.reason])));
 }
 // with "Mark unclear text" off, unclear text is not underlined and has no card
 {

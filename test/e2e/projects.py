@@ -78,6 +78,24 @@ with sync_playwright() as p:
     bad = pop.eval_on_selector_all('#list li', 'els => els.map(e => e.innerText.replace(/\\s+/g," "))')
     t('e2e projects: the popup follows the decision made on the page', any(r.startswith('Smart Service Analytics') for r in bad), bad)
     pop.screenshot(path=str(SHOTS) + '/popup-projects.png')
+    # 2.0.7: OK never makes text translated
+    nums = lambda: pop.evaluate("() => [document.querySelector('#nOk').textContent, document.querySelector('#score').textContent]")
+    def ok_on(name):
+        c = page.locator('td div', has_text=name).first; c.scroll_into_view_if_needed(); b = c.bounding_box()
+        page.mouse.move(b['x'] + 3, b['y'] + b['height'] / 2); time.sleep(0.2); page.mouse.move(b['x'] + 15, b['y'] + b['height'] / 2); time.sleep(0.6)
+        page.locator('button', has_text='OK').click(); time.sleep(2.5)
+    page.mouse.move(800, 700); time.sleep(0.6)
+    before = nums()
+    ok_on('Smart Service Analytics')                       # marked above: OK undoes the mark
+    pop.click('#tabUnsure'); time.sleep(0.3)
+    un = pop.eval_on_selector_all('#list li', 'els => els.map(e => e.innerText.replace(/\\s+/g," "))')
+    t('e2e projects: OK on text you marked puts it back under Unclear', any(r.startswith('Smart Service Analytics') for r in un), un)
+    ok_on('Customer Support Hub')                          # untranslated: OK lists it as ignored, the score stays
+    after = nums()
+    t('e2e projects: OK never raises the Translated count', after[0] == before[0], [before, after])
+    pop.click('#tabBad'); time.sleep(0.3)
+    bad = pop.eval_on_selector_all('#list li', 'els => els.map(e => e.innerText.replace(/\\s+/g," "))')
+    t('e2e projects: the OK\'d text leaves the Untranslated list', not any(r.startswith('Customer Support Hub') for r in bad), bad)
     ctx.close()
 print(f'\nprojects e2e: {sum(res)} passed, {len(res) - sum(res)} failed')
 raise SystemExit(0 if all(res) else 1)

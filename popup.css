@@ -96,7 +96,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visi
 .dot.bad{--c:var(--bad)} .dot.unsure{--c:var(--unclear)} .dot.bug{--c:var(--bug)} .dot.fmt{--c:var(--fmt)}
 .nav{display:flex;align-items:center;gap:4px;margin-top:6px;color:var(--muted)}
 .nav .spacer{flex:1}
-#pos{min-width:44px;text-align:center;font-size:12px}
+#pos{min-width:44px;text-align:center;font-size:12px;color:var(--ink);font-weight:600}
 
 /* issue list */
 ul{list-style:none;margin:8px 0 0;padding:0;max-height:260px;overflow:auto;display:grid;gap:4px}
@@ -118,6 +118,7 @@ li .acts{display:flex;flex-direction:column;justify-content:center;gap:2px}
 li .ignore-btn,li .mark-btn{padding:4px 6px;border-radius:8px;color:var(--muted);font-size:11px;white-space:nowrap}
 li .ignore-btn:hover,li .mark-btn:hover{background:var(--panel);color:var(--ink)}
 li .mark-btn{color:var(--bad)}
+@media (prefers-color-scheme:dark){li .mark-btn{color:#ff7a8a}} /* red text needs a lighter red on the dark theme (WCAG AA) */
 .ignore h3.sub{margin:8px 0 2px;font-size:11px;font-weight:600;color:var(--muted)}
 .empty{padding:14px;text-align:center;color:var(--muted)}
 
@@ -183,12 +184,15 @@ body.picking{min-height:330px}
 .occnav .icon.sm{width:24px;height:24px;font-size:16px;line-height:1}
 .occpos{min-width:84px;text-align:center}
 
-/* coverage line: every text item the check found, in exactly one category */
-.coverage{margin:6px 0 0;font-size:11.5px;color:#566176}
-.coverage b{color:#14213d;font-weight:600}
-/* legend: how the page is marked */
-.legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:4px 2px 6px;font-size:11.5px;color:#566176}
-.legend .lg{text-decoration:underline wavy;text-decoration-thickness:1.5px;text-underline-offset:3px;color:#14213d}
-.legend .lg.bad{text-decoration-color:var(--bad);background:var(--mark)}
-.legend .lg.unsure{text-decoration-color:var(--unclear)}
-.legend .lg-tip{flex-basis:100%}
+/* coverage line: every text item the check found, in exactly one category. Theme colours only (readable in light and dark). */
+.coverage{display:flex;flex-wrap:wrap;gap:2px 10px;margin:8px 0 0;font-size:12px;color:var(--muted)}
+.coverage span{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.coverage b{color:var(--ink);font-weight:700}
+.coverage i{width:7px;height:7px;border-radius:50%;background:var(--c)}
+.coverage .ok{--c:var(--ok)} .coverage .bad{--c:var(--bad)} .coverage .unsure{--c:var(--unclear)} .coverage .bug{--c:var(--bug)} .coverage .skip{--c:var(--muted)}
+/* legend: the colours used on the page, shown like the tabs (a dot and a plain label; the wavy underlines are only on the page) */
+.legend{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:6px 2px;font-size:12px;color:var(--ink)}
+.legend .lg{display:inline-flex;align-items:center;gap:5px}
+.legend .lg i{width:8px;height:8px;border-radius:50%;background:var(--c)}
+.legend .lg.bad{--c:var(--bad)} .legend .lg.unsure{--c:var(--unclear)}
+.legend .lg-tip{flex-basis:100%;color:var(--muted)}

@@ -172,14 +172,18 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     for (const it of raw) {
       // learned from earlier Ignore clicks (codes, versions, a page slot such as `span.user-name`): skipped like ignored terms
       // (kept as an Ignored item with its reason, so it is counted and exported instead of silently dropped)
-      if (state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host)) { state.learnedN++; it.base = { v: 'skip', reason: 'Ignored by a rule learned from your Ignore clicks' }; it.j = ''; it.len = 0; keep.push(it); continue; }
+      if (!state.okSet.has(nk(it.text)) && state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host)) { state.learnedN++; it.base = { v: 'skip', reason: 'Ignored by a rule learned from your Ignore clicks' }; it.j = ''; it.len = 0; keep.push(it); continue; }
       if (p.bugs) {
         const b = detectBug(it.text);
         if (b) { it.base = { v: 'bug', reason: b }; it.j = ''; it.len = it.text.length; keep.push(it); continue; }
       }
       // dates and times are checked on every scan; number and price formats only with Format hints on
       { const f = formatHints(it.text, p.lang, { numbers: p.hints, dates: true }); if (f.length) it.fmt = f; }
-      let m = mask(it.text, p.lang, termRe);
+      // Text you OK'd (Ignore in the popup, OK on the page) as a whole is still judged, so it can be listed as "OK'd by you" with what the models
+      // read, and so English you accepted still counts against the score: OK never turns untranslated text into translated text.
+      // (Ignored terms inside longer text are still masked there, as before.)
+      if (state.okSet.has(nk(it.text))) it.accepted = true;
+      let m = mask(it.text, p.lang, it.accepted ? state.baseRe : termRe);
       // On a page in another script, a one-word BrandCase title ("HomeIoT", "TrueCost") is judged as it is instead of being skipped as a brand:
       // built-in brands (WhatsApp, YouTube…) are still recognised as names, anything else is listed for a decision.
       if (p.lang !== 'en' && latinOnly(it.text) && !(termRe && termRe.test(it.text))) {
@@ -190,7 +194,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       if (!/\p{L}{2}/u.test(m.text)) {
         if (it.fmt || dateStyle(it.text)) { it.base = { v: 'skip', reason: 'Date or time (its format is checked under Format)' }; it.j = ''; it.len = 0; it.dateOnly = true; keep.push(it); continue; }
         // nothing left to judge (a code, an ID, a technical term, an ignored term): an Ignored item with the reason, never a silent drop
-        if (/\p{L}/u.test(it.text)) { ign++; it.base = { v: 'skip', reason: skipReason(it.text, p) }; it.j = ''; it.len = 0; keep.push(it); }
+        if (/\p{L}/u.test(it.text)) { ign++; it.base = { v: 'skip', reason: skipReason(it.text, p, it.accepted) }; it.j = ''; it.len = 0; keep.push(it); }
         continue;
       }
       it.j = m.text; it.nameLike = m.nameLike; it.len = m.text.length;
@@ -200,9 +204,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
   }
 
   // Why text was set aside before judging (the masks only remove; this names what removed it).
-  function skipReason(text, p) {
+  function skipReason(text, p, accepted) {
     const hit = (re) => { if (!re) return false; re.lastIndex = 0; return re.test(text); };
-    if (hit(state.userRe)) return 'On your ignore list';
+    if (!accepted && hit(state.userRe)) return 'On your ignore list';
     if (hit(state.techRe)) return 'Technical term (allowed in every language)';
     if (hit(state.siteRe)) return 'Name of this site or app';
     if (/\p{L}/u.test(text) && /\d/.test(text)) return 'Code, number or ID (letters mixed with digits)';
@@ -517,6 +521,14 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
         it.v = { ...it.v, v: 'bad', assumed: false, marked: true, reason: 'Marked untranslated by you', modelReason, modelVerdict: it.v.assumed ? 'unsure' : it.v.v };
       }
     }
+    // Text you OK'd: Ignored, with the models' reading kept. Untranslated text you accepted still counts against the score (see render).
+    for (const it of state.items) {
+      if (!it.accepted || it.v.v === 'bug' || it.v.v === 'ok') continue; // (text in the page's language stays translated)
+      if (it.v.assumed) state.assumedN--;
+      const was = it.v.assumed ? 'unsure' : it.v.v;
+      const what = { bad: 'not translated', unsure: 'unclear', ok: 'translated', name: 'a name', skip: 'a code or ID' }[was] || was;
+      it.v = { v: 'skip', reason: `OK’d by you (the models read it as ${what}${it.v.reason && !it.v.assumed && was !== 'skip' ? ': ' + it.v.reason : ''})`, accepted: true, was, votes: it.v.votes, detected: it.v.detected };
+    }
   }
 
   // ---------- Highlighting ----------
@@ -646,7 +658,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     stats.ignoredN = state.items.filter((it) => it.v.v === 'skip' && !it.dateOnly && !/learned/.test(it.v.reason || '') && nodeOf(it).isConnected).length;
     stats.scannedN = stats.okN + stats.badN + stats.unsureN + stats.bugN + stats.nameN + stats.skipN; // every text item, in exactly one category
     for (const g of groups.slice(0, 300)) withContext(g, 12);
-    const judged = stats.ok + stats.bad;
+    // English you OK'd is still English on the page: it stays in the score (as not translated), it just isn't listed as a problem any more
+    const acceptedBad = state.items.reduce((n, it) => n + (it.v.accepted && it.v.was === 'bad' && nodeOf(it).isConnected ? it.len : 0), 0);
+    const judged = stats.ok + stats.bad + acceptedBad;
     last = {
       lang: p.lang, requested: p.requested, mode: p.mode, host: location.hostname, pageLang: document.documentElement.lang || '', stats, auto: state.auto,
       score: judged ? Math.round((stats.ok / judged) * 100) : null,
@@ -826,7 +840,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     requestAnimationFrame(() => {
       moveQueued = false;
       const ev = lastMove;
-      if (!state || !ev) return;
+      if (!state || !ev || !state.p.hoverCard) { if (card) hideCard(true); return; }
       if (card && card.host.contains(ev.target)) { clearTimeout(cardTimer); return; } // on the card itself
       const id = hoverTarget(ev.clientX, ev.clientY, ev.target);
       if (id && (!card || card.id !== id)) showCard(id, ev.clientX, ev.clientY);
@@ -857,9 +871,13 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const btns = root.querySelector('.b');
     const btn = (label, cls, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.className = cls; b.title = title; b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); hideCard(true); fn(); }); btns.append(b); };
     const text = t.text;
-    if (i.marked) btn('Unmark', '', 'Let the language models judge it again', () => decide('unmark', text));
-    else if (i.verdict === 'unsure') btn('Not translated', 'p', 'List it as untranslated on every check of this site', () => decide('mark', text));
-    btn('OK', '', 'It is fine as it is: never flag it on this site', () => decide('ignore', text));
+    // OK never makes text "translated": on text you marked it undoes the mark (back to Unclear, or to what the models said); otherwise the text
+    // is listed as Ignored ("OK'd by you"), and English you accept still counts against the score.
+    if (i.marked) btn('OK', '', 'Undo your mark: back to what the language models said (Unclear)', () => decide('unmark', text));
+    else {
+      if (i.verdict === 'unsure') btn('Not translated', 'p', 'List it as untranslated on every check of this site', () => decide('mark', text));
+      btn('OK', '', 'Stop flagging it on this site. It is listed as Ignored, and if it is untranslated it still counts against the score', () => decide('ignore', text));
+    }
     host.addEventListener('mouseleave', () => hideCard(false));
     document.documentElement.appendChild(host);
     const box = root.querySelector('.c').getBoundingClientRect();
@@ -988,11 +1006,12 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       verify: params.verify !== false, confirmedOnly: !!params.confirmedOnly,
       learned: Array.isArray(params.learned) ? params.learned : [],
       marked: Array.isArray(params.marked) ? params.marked.filter((x) => typeof x === 'string') : [],
+      hoverCard: params.hoverCard !== false, // the card on underlined text (Settings › On the page)
     };
     const learnedTerms = p.learned.filter((r) => r.type === 'term').map((r) => r.value);
     state = { p, params, items: [], scope: { roots: new Set() }, ctx: null, ignoredN: 0, assumedN: 0, learnedN: 0, allIssues: [], source: null, sourceInfo: { status: p.source ? 'none' : 'off' },
       termRe: compileTerms([...p.ignore, ...learnedTerms, ...siteTerms(), ...TECH_TERMS]), learnMatch: matcher(p.learned), auto: null,
-      userRe: compileTerms([...p.ignore, ...learnedTerms]), techRe: compileTerms(TECH_TERMS), siteRe: compileTerms(siteTerms()) };
+      userRe: compileTerms([...p.ignore, ...learnedTerms]), okSet: new Set(p.ignore.map(nk)), baseRe: compileTerms([...learnedTerms, ...siteTerms(), ...TECH_TERMS]), techRe: compileTerms(TECH_TERMS), siteRe: compileTerms(siteTerms()) };
     try {
       const raw = [];
       await collectFrom(document.body, p, raw, state.scope);
@@ -1036,6 +1055,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       case 'focus': reply({ ok: focusIssue(msg.id) }); break;
       case 'status': reply({ result: last }); break;
       case 'export': reply(exportData()); break;
+      case 'tc-hovercard': if (state) { state.p.hoverCard = !!msg.on; state.params = { ...state.params, hoverCard: !!msg.on }; if (!msg.on) hideCard(true); } reply({ ok: true }); break;
       default: break;
     }
     return false;

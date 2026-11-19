@@ -19,3 +19,4 @@ rendered boxes, and the stretch test (the page's HTML must be byte-identical aft
 formats, and the CSV export (one line per row, no blank fields, every location).
 `projects.py` – the reported German "Projekte" list (`site/de-projects.html`): no project name is dropped, the coverage line, orange wavy
 underlines (pixel-checked), the hover card and its decision buttons, and the popup following a decision made on the page.
+`contrast.py` – every visible text in the popup (results, both tabs, settings) meets WCAG AA contrast in the light and the dark theme.

@@ -46,6 +46,7 @@
       <h2>On the page</h2>
       <label class="opt"><input type="checkbox" id="attrs" checked><i></i><span class="txt"><span class="t">Placeholders &amp; tooltips</span><span class="d">Also check alt text, placeholders and titles</span></span></label>
       <label class="opt"><input type="checkbox" id="unsure" checked><i></i><span class="txt"><span class="t">Mark unclear text</span><span class="d">Orange wavy underline under text that can’t be judged</span></span></label>
+      <label class="opt"><input type="checkbox" id="hoverCard" checked><i></i><span class="txt"><span class="t">Card on underlined text</span><span class="d">Show a card with the reason and buttons when pointing at underlined text</span></span></label>
       <label class="opt"><input type="checkbox" id="live" checked><i></i><span class="txt"><span class="t">Live updates</span><span class="d">Re-check as the page changes</span></span></label>
       <label class="opt"><input type="checkbox" id="source" checked><i></i><span class="txt"><span class="t">Compare with source language</span><span class="d">Uses the page’s hreflang alternate</span></span></label>
       <label class="opt"><input type="checkbox" id="hints"><i></i><span class="txt"><span class="t">Format hints</span><span class="d">Number and price formats (dates and times are always checked)</span></span></label>
@@ -112,7 +113,7 @@
       <button id="expCsv" class="ghost" title="Download CSV"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>CSV</button>
       <button id="expHtml" class="ghost" title="Download HTML report"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>Report</button>
     </div>
-    <p class="legend" id="legend"><span class="lg bad">Not translated</span><span class="lg unsure">Unclear</span><span class="lg-tip">Point at underlined text on the page to decide</span></p>
+    <p class="legend" id="legend"><span class="lg bad"><i></i>Not translated</span><span class="lg unsure"><i></i>Unclear</span><span class="lg-tip" id="legendTip">Point at underlined text on the page to decide</span></p>
     <ul id="list"></ul>
   </section>
 

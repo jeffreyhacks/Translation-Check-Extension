@@ -95,7 +95,7 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('popup: settings drawer is collapsed by default, language field is labelled', p.$('#settings').hidden && p.$('#result').hidden && /Page should be in/.test(p.$('.cap').textContent) && p.$('h1').textContent === 'Translation Check');
   p.$('#settingsBtn').click();
   t('popup: gear opens the settings drawer', !p.$('#settings').hidden && p.$('#settingsBtn').getAttribute('aria-expanded') === 'true');
-  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 4 && p.d.querySelectorAll('#settings .opt .d').length === 10 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
+  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 4 && p.d.querySelectorAll('#settings .opt .d').length === 11 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
   t('popup: drawer has strictness segments and the new model switches', p.d.querySelectorAll('input[name=mode]').length === 3 && p.$('#verify').checked && !p.$('#confirmed').checked);
   t('popup: side-panel button shown in popup', p.$('#openPanel').hidden === false);
   t('popup: button says "Check page" on web pages', p.$('#scanLabel').textContent === 'Check page');
@@ -398,11 +398,32 @@ const G = {
   const csv = (await readBlob(p.w, p.downloads.find((d) => d.size))).replace(/^﻿/, '');
   const rows = csv.split('\r\n').slice(1);
   t('projects csv: unclear rows are in the export with a reason', rows.some((r) => r.startsWith('"Can’t tell","Smart Service Analytics","Name or title')), rows.filter((r) => /Smart/.test(r)).join('\n'));
-  t('projects csv: ignored rows are in the export with a reason', rows.some((r) => r.startsWith('"Ignored","Wisight","On your ignore list"')) && rows.some((r) => /^"Ignored","\d\d\.\d\d\.2026","Date or time/.test(r)), rows.filter((r) => r.startsWith('"Ignored"')).slice(0, 3).join('\n'));
+  t('projects csv: ignored rows are in the export with a reason', rows.some((r) => r.startsWith('"Ignored","Wisight","OK’d by you (the models read it as unclear')) && rows.some((r) => /^"Ignored","\d\d\.\d\d\.2026","Date or time/.test(r)), rows.filter((r) => r.startsWith('"Ignored"')).slice(0, 3).join('\n'));
   // a decision made on the page (hover card) reaches this window through storage
   p.storageChanged({ marked: { newValue: { global: [], sites: { 'knowledge-harvestor.artisanscloud.com': ['Smart Service Analytics'] } } } });
   p.$('#settingsBtn').click();
   t('projects popup: a decision made on the page shows up in the marked list here', p.$('#markedSite').value === 'Smart Service Analytics', p.$('#markedSite').value);
+}
+
+// ---------- 2.0.7: readable counts, plain legend, card setting, tab counts = rows ----------
+{
+  const css = fs.readFileSync('popup.css', 'utf8');
+  const rules = (sel) => css.split('}').filter((r) => r.trim().startsWith(sel)).join('}');
+  t('207 css: coverage and legend use theme colours only (readable in light and dark)', !/#[0-9a-f]{3,6}/i.test(rules('.coverage') + rules('.legend')) && /\.coverage b\{color:var\(--ink\)/.test(css), rules('.coverage'));
+  t('207 css: no wavy underline or highlight in the popup legend', !/wavy|var\(--mark\)/.test(rules('.legend')));
+  const G = { ...RESULT, stats: { ...RESULT.stats, badN: 5, scannedN: 40, skipN: 3 }, issues: [...RESULT.issues, { id: 9, verdict: 'bad', kind: 'text', text: 'Save', count: 3, occ: [{ id: 9 }, { id: 10 }, { id: 11 }], reason: 'Looks like English text', len: 4 }] };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: G });
+  t('207 setting: "Card on underlined text" is on by default', p.$('#hoverCard').checked);
+  p.$('#scan').click(); await sleep(60);
+  t('207 scan: the setting is sent with the check', p.sent.find((m) => m.type === 'scan').hoverCard === true);
+  t('207 tabs: the Untranslated count is the number of rows, the same as the navigator', p.$('#tabBad .n').textContent === '3' && p.$('#pos').textContent === '0 / 3' && /5 places/.test(p.$('#tabBad').title), `${p.$('#tabBad .n').textContent} | ${p.$('#pos').textContent} | ${p.$('#tabBad').title}`);
+  t('207 legend: a dot and a plain label for each colour', p.d.querySelectorAll('#legend .lg i').length === 2 && /Not translated/.test(p.$('#legend .lg.bad').textContent) && /Unclear/.test(p.$('#legend .lg.unsure').textContent));
+  t('207 coverage: bold numbers with a colour dot per category', p.d.querySelectorAll('#coverage b').length >= 5 && p.d.querySelectorAll('#coverage i').length >= 4 && /^40 scanned/.test(p.$('#coverage').textContent), p.$('#coverage').textContent);
+  p.$('#hoverCard').checked = false; p.$('#hoverCard').dispatchEvent(new p.w.Event('change')); await sleep(30);
+  t('207 setting: switching it off is saved and sent to the page right away', p.store.opts.hoverCard === false && p.sent.some((m) => m.type === 'tc-hovercard' && m.on === false), JSON.stringify(p.sent.slice(-2)));
+  t('207 setting: with the card off, the legend points to the row buttons', /buttons on each row/.test(p.$('#legendTip').textContent));
+  const p2 = await boot('popup.html', 'https://shop.example.com/x', { store: { opts: { hoverCard: false, unclearMarks: 2 } } });
+  t('207 setting: the choice is remembered', p2.$('#hoverCard').checked === false);
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
