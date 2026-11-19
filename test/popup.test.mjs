@@ -1,5 +1,6 @@
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
+import { loadNew } from './harness.mjs';
 let pass = 0, fail = 0;
 const t = (name, cond, extra = '') => { if (cond) pass++; else fail++; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : '  ' + extra}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -355,6 +356,30 @@ const G = {
   p.$('#scan').click(); await sleep(60);
   p.$('#list .ignore-btn').click(); await sleep(80);
   t('206 learn: without learn.js, Ignore still saves the term and re-checks', JSON.stringify(p.store.ignore.sites['shop.example.com']) === '["Add to cart"]' && p.sent.filter((m) => m.type === 'scan').length === 2);
+}
+
+// ---------- reported: CSV of the German "Connectors" page (real scan and export data) ----------
+{
+  const page = loadNew(fs.readFileSync('test/e2e/site/de-connectors.html', 'utf8'), { url: 'https://knowledge-harvestor.artisanscloud.com/admin/connectors' });
+  const res = await page.call({ type: 'scan', lang: 'de', attrs: true, unsure: true, mode: 'balanced', source: false, live: false, marked: ['Übersicht'] });
+  const ex = await page.call({ type: 'export' });
+  const p = await boot('popup.html', ex.url, { result: res, export: ex });
+  p.$('#scan').click(); await sleep(60);
+  p.$('#expCsv').click(); await sleep(50);
+  const csv = (await readBlob(p.w, p.downloads.find((d) => d.size))).replace(/^﻿/, '');
+  const lines = csv.split('\r\n');
+  const parse = (line) => [...line.matchAll(/"((?:[^"]|"")*)"/g)].map((m) => m[1].replace(/""/g, '"'));
+  const head = parse(lines[0]), rows = lines.slice(1).map(parse);
+  const col = (r, name) => r[head.indexOf(name)];
+  const row = (text) => rows.find((r) => col(r, 'text') === text);
+  t('csv connectors: no line breaks inside fields (one line per row)', !/\n/.test(csv.replace(/\r\n/g, '')) && lines.length === ex.issues.length + 1, JSON.stringify(csv.slice(0, 300)));
+  t('csv connectors: no blank "detected language" (unknown / n/a instead)', rows.every((r) => col(r, 'detected language')), JSON.stringify(rows.map((r) => [col(r, 'text'), col(r, 'detected language')])));
+  t('csv connectors: no blank surrounding text', rows.every((r) => col(r, 'surrounding text')), JSON.stringify(rows.map((r) => [col(r, 'text'), col(r, 'surrounding text')])));
+  t('csv connectors: "Connectors" lists both locations in context and all locations, separated by " | "', col(row('Connectors'), 'occurrences') === '2' && col(row('Connectors'), 'context').split(' | ').length === 2 && col(row('Connectors'), 'all locations').split(' | ').length === 2, JSON.stringify(row('Connectors')));
+  t('csv connectors: "where" names the element (tab, badge, paragraph), not just "text"', col(row('Connectors'), 'where') === 'tab' && col(row('Valid'), 'where') === 'badge' && rows.every((r) => col(r, 'where') !== 'text'), JSON.stringify(rows.map((r) => col(r, 'where'))));
+  t('csv connectors: selectors start at #root', rows.every((r) => col(r, 'selector').startsWith('#root')));
+  const m = row('Übersicht');
+  t('csv connectors: a marked row keeps the models\' reason next to yours', m && /^Marked untranslated by you; models: \S/.test(col(m, 'reason')), m && col(m, 'reason'));
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

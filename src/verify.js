@@ -236,7 +236,9 @@ export function createVerifier(cldFallback = async () => null) {
     if (agree && (letters(text) >= 10 || notEnglish) && !blocked('other')) {
       return { v: 'bad', detected: relabel(words, lead), reason: notEnglish ? 'Not an English word; two language models read it as another language' : 'Two language models read this as another language', votes, confirmed: true, agree, via: 'verify', ...(notEnglish ? { notEnglish } : {}) };
     }
-    return { ...v, votes };
+    // the language the models leaned to, for the report, even when it wasn't enough to decide ("detected language" is never left empty for no reason)
+    const lean = against.length ? majority(against.map((x) => x.lang), against[0].lang) : undefined;
+    return { ...v, votes, ...(lean && !v.detected ? { lean } : {}) };
   }
 
   return { verify, status: () => ({ ...status }) };

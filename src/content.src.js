@@ -1,9 +1,10 @@
 // Translation Check — page-side scanner (injected on demand via activeTab, or automatically on opted-in sites).
 // Language judgement happens in the background worker (one shared model); this script only collects,
 // masks, highlights and reports.
-import { mask, compileTerms } from './mask.js';
-import { detectBug, formatHints } from './rules.js';
-import { describe, contextLine, slotOf } from './context.js';
+import { mask, compileTerms, TECH_TERMS } from './mask.js';
+import { detectBug, formatHints, dateStyle } from './rules.js';
+import { describe, contextLine, slotOf, kindOf } from './context.js';
+import { isStatusValue, isStatusSlot } from './status.js';
 import { matcher } from './learn.js';
 import { nonLatinTarget, latinOnly } from './scripts.js';
 
@@ -105,7 +106,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
   }
   const TIP_ATTRS = ['data-tooltip', 'data-tip', 'data-tippy-content', 'data-bs-original-title', 'data-original-title'];
-  const collectable = (t, p) => t.length >= 2 && !URLISH.test(t) && (/\p{L}/u.test(t) || /[{%]/.test(t) || (p.hints && /\d/.test(t)));
+  const collectable = (t, p) => t.length >= 2 && !URLISH.test(t) && (/\p{L}/u.test(t) || /[{%]/.test(t) || (p.hints ? /\d/ : /\d[/.:-]\d/).test(t)); // (dates and times are always checked)
   const blocked = (el) => !!(el.closest && (el.closest(NO_TRANSLATE) || el.closest(SKIP_SEL)));
 
   async function collectFrom(root, p, out, scope, depth = 0) {
@@ -175,7 +176,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
         const b = detectBug(it.text);
         if (b) { it.base = { v: 'bug', reason: b }; it.j = ''; it.len = it.text.length; keep.push(it); continue; }
       }
-      if (p.hints) { const f = formatHints(it.text, p.lang); if (f.length) it.fmt = f; }
+      // dates and times are checked on every scan; number and price formats only with Format hints on
+      { const f = formatHints(it.text, p.lang, { numbers: p.hints, dates: true }); if (f.length) it.fmt = f; }
       let m = mask(it.text, p.lang, termRe);
       // On a page in another script, a one-word BrandCase title ("HomeIoT", "TrueCost") is judged as it is instead of being skipped as a brand:
       // built-in brands (WhatsApp, YouTube…) are still recognised as names, anything else is listed for a decision.
@@ -186,7 +188,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       }
       if (!/\p{L}{2}/u.test(m.text)) {
         if (/\p{L}/u.test(it.text)) ign++;
-        if (it.fmt) { it.base = { v: 'ok' }; it.j = ''; it.len = 0; keep.push(it); }
+        if (it.fmt || dateStyle(it.text)) { it.base = { v: 'ok' }; it.j = ''; it.len = 0; it.dateOnly = true; keep.push(it); }
         continue;
       }
       it.j = m.text; it.nameLike = m.nameLike; it.len = m.text.length;
@@ -316,9 +318,23 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     await classifyTexts([...todo.map((it) => it.j), ...todo.filter((it) => it.jPart).map((it) => it.jPart)]);
     // On a page written in another script (Hindi, Arabic, Russian…), Latin-letter text can never be in the page's language, whatever surrounds it.
     const otherScript = nonLatinTarget(state.p.lang);
+    const elOf = (it) => (it.kind === 'text' ? it.node.parentElement || it.node.parentNode?.host : it.el);
     for (const it of todo) { // pass 1
       let v = vcache.get(ck(it.j));
       it.wrongScript = otherScript && latinOnly(it.j);
+      const latinTarget = !otherScript && state.p.lang !== 'en' && latinOnly(it.j);
+      // A status value in a badge or table cell ("Valid", "Completed", "In progress") is data from the app; spelled in English on a page in another
+      // language it is untranslated, even when the models can't place one short word or the word list knows it as a loanword (see status.js).
+      if (latinTarget && v.v !== 'bad' && v.v !== 'bug' && it.kind === 'text' && isStatusValue(it.text, state.p.lang) && isStatusSlot(elOf(it))) {
+        v = { ...v, v: 'bad', detected: 'en', reason: 'English status value', confirmed: otherVotes(v) >= 2 || !!v.enVocab, status: true };
+      }
+      // An English label on a tab, button, menu item, option or column header ("Knowledge Intelligence", "Document Repo") is interface text, not a
+      // product name, even when it is written in Title Case: two models read it as English and at least one of its words is an English dictionary word.
+      const ctl = latinTarget && !v.status && CONTROL.has(kindOf(elOf(it), it.kind === 'attr' ? it.attr : undefined));
+      if (ctl && (v.v === 'bad' || v.v === 'unsure') && words(it.j) >= 2 && words(it.j) <= 5 && otherVotes(v) >= 2 && (v.enWords || 0) >= 1 &&
+          (v.detected || v.other || v.was?.detected || v.lean) === 'en') {
+        v = { ...v, v: 'bad', detected: 'en', reason: 'English interface label (two language models read it as English)', confirmed: true, label: true, control: true };
+      }
       // Short capitalised phrases are often product/person names: weak evidence isn't enough to flag them
       // (unless every word is plain interface vocabulary, like "Order History": that is a label, not a name).
       if (it.nameLike && v.v === 'bad' && !v.label && v.reason !== 'Looks like English text') {
@@ -406,6 +422,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
   }
 
+  // Interface controls whose text is a label, never a name or title.
+  const CONTROL = new Set(['tab', 'button', 'menu item', 'option', 'table header']);
+
   // Page-level tendency: if the page is clearly translated, unclear short strings almost certainly are too.
   function finalize() {
     let okC = 0, badC = 0;
@@ -426,7 +445,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       for (const it of state.items) {
         if (it.v.v === 'bad' || it.v.v === 'bug' || !marked.has(nk(it.text))) continue;
         if (it.v.assumed) state.assumedN--;
-        it.v = { ...it.v, v: 'bad', assumed: false, marked: true, reason: 'Marked untranslated by you' };
+        // the models' own reading is kept next to the person's mark, so the export still shows what they decided and why
+        const modelReason = it.v.assumed ? 'Unclear; assumed translated because the rest of the page is' : it.v.reason || (it.v.v === 'ok' ? 'Read as the target language' : it.v.v === 'name' ? 'Looks like a name' : 'Too short or ambiguous to judge');
+        it.v = { ...it.v, v: 'bad', assumed: false, marked: true, reason: 'Marked untranslated by you', modelReason, modelVerdict: it.v.assumed ? 'unsure' : it.v.v };
       }
     }
   }
@@ -518,14 +539,21 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
         if (!RANK[cur] || RANK[verdict] > RANK[cur]) n.setAttribute(A_FLAG, NS + ':' + verdict);
       }
       const hint = HINTS.has(verdict);
-      issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: hint ? undefined : it.v?.votes, confirmed: !hint && !!it.v?.confirmed, marked: !hint && !!it.v?.marked, reason: reason && it.v?.via === 'context' && !hint ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length, ...extra });
+      issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: hint ? undefined : it.v?.votes, confirmed: !hint && !!it.v?.confirmed, marked: !hint && !!it.v?.marked, modelReason: hint ? undefined : it.v?.modelReason, reason: reason && it.v?.via === 'context' && !hint ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length, ...extra });
     };
+    // dates written in more than one way on the same page ("13/11/2026" and "13.11.2026", or "Nov 13, 2026" and "13 Nov 2026")
+    const styles = new Set(state.items.filter((it) => nodeOf(it).isConnected).map((it) => dateStyle(it.text)).filter(Boolean));
+    const numeric = [...styles].filter((x) => x.startsWith('numeric'));
+    const mixedDates = numeric.length > 1 || (styles.has('month name, month first') && styles.has('month name, day first'))
+      ? `Dates on this page are written in different formats (${[...styles].join('; ')})` : '';
     for (const it of state.items) {
       if (!nodeOf(it).isConnected) continue;
       const v = it.v;
       stats[v.v] += it.len; stats[v.v + 'N']++;
-      if (v.v !== 'ok' && v.v !== 'name') add(it, v.v, v.reason, v.detected); // names are counted, never highlighted
-      if (p.hints && it.fmt) for (const f of it.fmt) { stats.fmtN++; add(it, 'fmt', f); }
+      // the language the models leaned to, when no verdict names one ("Document Repo": two models said English, but it stayed unclear)
+      if (v.v !== 'ok' && v.v !== 'name') add(it, v.v, v.reason, v.detected || v.lean || v.was?.detected || v.other); // names are counted, never highlighted
+      const fmt = [...(it.fmt || []), ...(mixedDates && dateStyle(it.text) ? [mixedDates] : [])];
+      for (const f of fmt) { stats.fmtN++; add(it, 'fmt', f); }
     }
     for (const win of marks.keys()) {
       const m = marks.get(win), reg = win.CSS.highlights;
@@ -541,7 +569,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       lang: p.lang, requested: p.requested, mode: p.mode, host: location.hostname, pageLang: document.documentElement.lang || '', stats, auto: state.auto,
       score: judged ? Math.round((stats.ok / judged) * 100) : null,
       issues: groups.slice(0, 300).map((i) => ({ ...i, text: i.text.slice(0, 160) })), truncated: Math.max(0, groups.length - 300),
-      source: state.sourceInfo, models: state.models, live: !!observers.length,
+      source: state.sourceInfo, models: state.models, live: p.live && !!observers.length,
     };
   }
 
@@ -593,7 +621,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
   }
 
   function clearAll() {
-    clearTimeout(timer); firstChange = 0; dirty.clear(); unfocus();
+    clearTimeout(timer); clearTimeout(lateTimer); firstChange = 0; dirty.clear(); unfocus();
     observers.forEach((o) => o.disconnect()); observers = []; observed = new WeakSet();
     resetMarks();
     purgeForeign();
@@ -647,7 +675,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
   function selectorOf(el) {
     const parts = [];
     let n = el;
-    while (n && n.nodeType === 1 && parts.length < 8) {
+    // the full path up to the nearest id (or the document root), so every copy can be found again (no depth limit that cut paths off mid-way)
+    while (n && n.nodeType === 1 && parts.length < 60) {
       if (n.id && /^[A-Za-z][\w-]*$/.test(n.id)) { parts.unshift('#' + n.id); break; }
       let s = n.tagName.toLowerCase();
       const par = n.parentElement;
@@ -689,7 +718,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
   // ---------- Live updates: re-judge only what changed ----------
   // A check runs once the page has been quiet for QUIET ms, and never later than MAX_WAIT ms after the first change: pages with a ticking
   // clock or live counters ("Zuletzt aktualisiert …", "vor 3 Sekunden") change all the time, and a plain "wait until quiet" never ran there.
-  const QUIET = 250, MAX_WAIT = 800;
+  const QUIET = 250, MAX_WAIT = 800, LATE_MS = 5000;
+  let lateTimer = 0;
   function schedule() {
     const now = Date.now();
     if (!firstChange) firstChange = now;
@@ -788,7 +818,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     };
     const learnedTerms = p.learned.filter((r) => r.type === 'term').map((r) => r.value);
     state = { p, params, items: [], scope: { roots: new Set() }, ctx: null, ignoredN: 0, assumedN: 0, learnedN: 0, allIssues: [], source: null, sourceInfo: { status: p.source ? 'none' : 'off' },
-      termRe: compileTerms([...p.ignore, ...learnedTerms, ...siteTerms()]), learnMatch: matcher(p.learned), auto: null };
+      termRe: compileTerms([...p.ignore, ...learnedTerms, ...siteTerms(), ...TECH_TERMS]), learnMatch: matcher(p.learned), auto: null };
     try {
       const raw = [];
       await collectFrom(document.body, p, raw, state.scope);
@@ -811,7 +841,13 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       if (my !== seq || !state) return { error: 'A newer check replaced this one.' };
       finalize(); render();
       if (p.live) { for (const r of state.scope.roots) observe(r); if (params.lang === 'auto') watchLang(); }
-      last.live = !!observers.length;
+      else {
+        // Live updates off: text that arrives just after the check (table rows and status badges loaded from the server) is still picked up
+        // for a few seconds, then the page is left alone.
+        for (const r of state.scope.roots) observe(r);
+        lateTimer = setTimeout(() => { if (state && !state.p.live) { observers.forEach((o) => o.disconnect()); observers = []; observed = new WeakSet(); } }, LATE_MS);
+      }
+      last.live = p.live && !!observers.length;
       announce(false);
       return last;
     } catch (e) {

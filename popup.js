@@ -171,7 +171,7 @@ function render() {
     }
     b.append(meta);
     if (i.reason) b.append(el('span', 'why', i.reason));
-    b.title = i.reason || 'Too short or ambiguous to judge';
+    b.title = (i.reason || 'Too short or ambiguous to judge') + (i.marked && i.modelReason ? `\nModels: ${i.modelReason}` : '');
     // a click on the selected row moves on to the next place the same text appears; coming back to a row resumes where you left it
     b.addEventListener('click', () => {
       if (cursor === idx && occ.length > 1) occAt.set(i.id, (at + 1) % occ.length);
@@ -462,9 +462,23 @@ $('#impFile').addEventListener('change', async () => {
 const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const LABEL = { bad: 'Not translated', unsure: 'Can’t tell', bug: 'Broken text', fmt: 'Format hint' };
-const places = (i) => (i.occurrences || []).map((o) => [o.where, o.selector].filter(Boolean).join(' — ')).join('\n');
-const nearText = (i) => { const o = (i.occurrences || [])[0]; return o && (o.before || o.after) ? `${o.before} [${i.text}] ${o.after}`.trim() : ''; };
-const where = (i) => (i.kind === 'pdf' ? `page ${i.pages && i.pages.length > 1 ? i.pages.join(', ') : i.page}` : i.kind === 'attr' ? i.attr + ' attribute' : 'text');
+// One line per field: several locations are separated by " | ", never by a line break (a line break inside a field splits the row in text
+// editors and breaks some spreadsheet imports).
+const flat = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+const SEP = ' | ';
+const places = (i) => (i.occurrences || []).map((o) => flat([o.where, o.selector].filter(Boolean).join(' — '))).join(SEP);
+const contexts = (i) => (i.occurrences && i.occurrences.length ? i.occurrences.map((o) => flat(o.where) || where(i)).join(SEP) : flat(i.context ? [i.context.kind, i.context.path].filter(Boolean).join(' · ') : ''));
+const nearText = (i) => {
+  const occ = (i.occurrences || []).filter((o) => o.before || o.after);
+  if (occ.length) return occ.map((o) => flat(`${o.before} [${i.text}] ${o.after}`)).join(SEP);
+  const c = i.context;
+  return c && c.path ? flat(`[${i.text}] in ${c.path}`) : flat(`[${i.text}]`); // nothing around it on the page: say where it sits instead
+};
+// what kind of element the text is in (tab, heading, table cell, badge, button, placeholder…), or the PDF page
+const where = (i) => (i.kind === 'pdf' ? `page ${i.pages && i.pages.length > 1 ? i.pages.join(', ') : i.page}` : i.kind === 'attr' ? (i.context?.kind || i.attr + ' attribute') : (i.context?.kind || i.occurrences?.[0]?.where?.split(' · ')[0] || 'text'));
+const detectedOf = (i) => (i.verdict === 'bug' || i.verdict === 'fmt' ? 'n/a' : i.detected || 'unknown');
+// for text you marked as untranslated, the models' own reading is kept next to your mark
+const reasonOf = (i) => flat(i.marked && i.modelReason ? `${i.reason}; models: ${i.modelReason}` : i.reason || (i.verdict === 'unsure' ? 'Too short or ambiguous to judge' : ''));
 const agree = (i) => (i.votes ? `${['tinyld', 'cld3', 'franc'].filter((k) => i.votes[k] === 'other').length}/3 models${i.confirmed ? ' (confirmed)' : ''}` : '');
 
 async function getExport() {
@@ -479,8 +493,8 @@ $('#expCsv').onclick = async () => {
     const d = await getExport();
     // new columns go at the end, so existing spreadsheets and scripts that read the first eight keep working
     const head = ['type', 'text', 'reason', 'detected language', 'model agreement', 'where', 'selector', 'document', 'occurrences', 'context', 'surrounding text', 'all locations'];
-    const rows = d.issues.map((i) => [LABEL[i.verdict], i.text, i.reason, i.detected, agree(i), where(i), i.selector, d.url,
-      i.count || 1, i.context ? [i.context.kind, i.context.path].filter(Boolean).join(' · ') : '', nearText(i), places(i)]);
+    const rows = d.issues.map((i) => [LABEL[i.verdict], flat(i.text), reasonOf(i), detectedOf(i), agree(i) || 'n/a', where(i), i.selector || 'n/a', d.url,
+      i.count || 1, contexts(i), nearText(i), places(i)]);
     download('translation-issues.csv', 'text/csv', '\ufeff' + [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n'));
   } catch (e) { setStatus(e.message, true); }
 };
@@ -490,7 +504,7 @@ $('#expHtml').onclick = async () => {
     const loc = (i) => (i.occurrences && i.occurrences.length
       ? `<ol>${i.occurrences.map((o) => `<li>${esc(o.where || where(i))}${o.before || o.after ? `<br><i>${esc(o.before)} [${esc(i.text)}] ${esc(o.after)}</i>` : ''}${o.selector ? '<br><code>' + esc(o.selector) + '</code>' : ''}</li>`).join('')}</ol>`
       : `${esc(where(i))}${i.selector ? '<br><code>' + esc(i.selector) + '</code>' : ''}`);
-    const rows = d.issues.map((i) => `<tr><td>${esc(LABEL[i.verdict])}</td><td>${esc(i.text)}${(i.count || 1) > 1 ? ` <b>×${i.count}</b>` : ''}</td><td>${esc(i.reason)}${i.detected ? ' (' + esc(i.detected) + ')' : ''} ${esc(agree(i))}</td><td>${loc(i)}</td></tr>`).join('');
+    const rows = d.issues.map((i) => `<tr><td>${esc(LABEL[i.verdict])}</td><td>${esc(i.text)}${(i.count || 1) > 1 ? ` <b>×${i.count}</b>` : ''}</td><td>${esc(reasonOf(i))}${i.detected ? ' (' + esc(i.detected) + ')' : ''} ${esc(agree(i))}</td><td>${loc(i)}</td></tr>`).join('');
     download('translation-report.html', 'text/html', `<!doctype html><meta charset="utf-8"><title>Translation report</title>
 <style>body{font:14px system-ui;margin:24px;color:#14213d}table{border-collapse:collapse;width:100%}td,th{border:1px solid #dde3ec;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f1f4f9}code{font-size:12px}ol{margin:0;padding-left:18px}i{color:#566176}</style>
 <h1>Translation report</h1><p><a href="${esc(d.url)}">${esc(d.title || d.url)}</a><br>Target language: <b>${esc(d.lang)}</b> · ${esc(d.generated)} · ${d.issues.length} issue(s)</p>

@@ -25,7 +25,7 @@ The popup shows a score (the share of the page's text that is in the target lang
 | **Untranslated** | Text in another language than the target. Highlighted in yellow on the page. |
 | **Unclear** | Text the models can't judge with confidence (very short text, names, words shared by several languages). |
 | **Broken** | Leaked translation keys (`checkout.button.save`), unfilled placeholders (`{{name}}`, `%s`, `{0}`), `undefined`/`NaN`, `[object Object]` and missing-translation markers. Shown only when something is found. |
-| **Format** | Number, price and date formats that don't fit the language. Shown when *Format hints* is on. |
+| **Format** | Date and time formats that don't fit the language (always checked), and number and price formats (with *Format hints* on). Shown when something is found. |
 
 Click a row to scroll to it on the page; **‹ ›** step through the list. Each row shows:
 - **where the text is**: *button · Navigation “Main menu”*, *table cell · Table › “Projektgesundheitsübersicht”*, plus the text just before and after it;
@@ -59,8 +59,12 @@ Broad shapes such as "a capitalised word" are never learned, because they would 
 learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
 
 ### Exports
-- **CSV**: one row per finding, with type, text, reason, detected language, model agreement, location, CSS selector, page, number of
-  copies, context, surrounding text and every location.
+- **CSV**: one row per finding, with type, text, reason, detected language, model agreement, element type (*where*: tab, heading, table cell,
+  badge, button, placeholder…), CSS selector, page, number of copies, context, surrounding text and every location. No field is left empty
+  (*unknown* when no language could be named, *n/a* where a column doesn't apply) and no field contains a line break: several locations are
+  separated by ` | `, one per copy in both *context* and *all locations*. Selectors are full paths from the nearest id (`#root > …`). For
+  text you marked as untranslated, *reason* keeps the models' own reading too (*Marked untranslated by you; models: …*). Text alone in a table
+  cell has the rest of its row as surrounding text, and its context names the column (*Table › column “Status”*).
 - **Report**: the same as a standalone HTML page to share.
 - **Ignore & marked lists** (Settings): export and import as JSON, including learned rules and marked texts, to share them with your team.
 
@@ -78,7 +82,7 @@ learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
 | | **Mark unclear text** | Highlights unclear text on the page as well. |
 | | **Live updates** | Checks text that appears or changes after the check. |
 | | **Compare with source language** | Flags text identical to the page's English (`hreflang`) version. |
-| | **Format hints** | Checks number, price and date formats. |
+| | **Format hints** | Checks number and price formats. Date and time formats are checked on every scan. |
 | This site | **Check site automatically** | Checks every page of the current site when it loads (asks for access to that one site). |
 | | **Ignore & marked lists** | The ignore list and the marked-untranslated list, for this site and for all sites, editable one per line. |
 
@@ -140,9 +144,31 @@ People, places and brands read the same in every language, so they are neither t
 13,000 surnames from 70 locales, cities, brands, common Malay names) or by its shape: capitalised words that are not ordinary vocabulary and
 that the models can't agree on. Interface wording such as "Order History" is a label, not a name, and is still checked.
 
-### Dates
-Dates are formatted values and are skipped, including ones with month names ("10. Nov. 2026", "10 de noviembre de 2026"). With *Format
-hints* on, an English month name on a non-English page ("Dec 3" on a German page) gets a hint.
+### Status values
+Status values ("Valid", "Completed", "In progress") come from the app's data and sit in badges, pills and table cells. A model can't place
+one short word, and the target language's word list may know it as a loanword (German lists have "valid"), so they used to be assumed
+translated. In a status slot (a badge or pill, `role="status"`, a table cell or definition value) a plain English status word on a page in
+another Latin-script language is **untranslated** (*English status value*). Words the target language spells the same way are left alone
+("Online", "Offline"; "Active" in French, "Error" in Spanish, "Open" in Dutch).
+
+### Labels on tabs and buttons
+A Title Case phrase on a tab, button, menu item, option or column header ("Knowledge Intelligence", "Document Repo") is interface text, not a
+product name: when two models read it as English and at least one of its words is an English dictionary word, it is **untranslated**
+(*English interface label*) without needing a manual mark. The same phrase in a table cell or a card title is still judged as a possible
+name (*Name or title?*).
+
+### Technical terms
+Terms that stay in English in every interface (REST API, API, URL, JSON, OAuth, SSO, Webhook, SDK, GraphQL…) are set aside like codes and
+counted under *skipped*, never listed as unclear. Add your own with **Ignore**.
+
+### Dates and times
+Dates are formatted values and are not judged as text, including ones with month names ("10. Nov. 2026", "10 de noviembre de 2026"). Their
+format is checked on every scan and listed under **Format**:
+- an English month name on a non-English page ("Dec 3" on a German page);
+- English date order ("Nov 13, 2026") on a page whose language puts the day first ("13. Nov. 2026");
+- 12-hour times ("08:38 PM") on a page whose language uses the 24-hour clock ("20:38");
+- a date separator the language doesn't use ("13/11/2026" on a German page);
+- dates written in different formats on the same page ("13/11/2026" next to "14.11.2026").
 
 ## Page's own language
 Many apps switch their interface language without updating `<html lang>`. With **Page's own language** selected, the page's own text
@@ -151,6 +177,9 @@ A page that declares another language keeps it, unless that language is essentia
 updates on, switching the app's interface language re-checks the page in the new language by itself.
 
 ## Live updates
+With live updates off, text that appears in the first five seconds after a check (table rows and status badges loaded from the server) is
+still checked, then the page is left alone.
+
 With **Live updates** on, text that appears or changes after the check is checked too, usually within a third of a second. Changes are
 collected for 0.25 s and checked together, and never wait more than 0.8 s, so pages with a ticking clock or live counters are kept up to
 date. Only the changed parts are checked again. *Page's own language* is re-detected when `<html lang>` changes or a larger amount of text
@@ -186,7 +215,7 @@ Local `file://` PDFs need **Allow access to file URLs** on the extension's detai
 | `popup.html`, `panel.html`, `popup.js`, `popup.css` | Popup and side panel (same code; `panel.html` is generated). |
 | `learn.js` | Ignore-list learning, built from `src/learn.js`. |
 | `pdfcheck.js`, `vendor/` | PDF reader (pdf.js, Apache-2.0). |
-| `src/` | Sources: `engine.js` (tinyld and rules), `verify.js` (CLD3/franc voting), `english.js` and `wordlists.js` (dictionaries), `names.js` and `namelists.js` (names), `context.js` (where text sits), `mask.js`, `rules.js`, `guard.js`, `scripts.js`, `alphabet.js`, `dates.js`. |
+| `src/` | Sources: `engine.js` (tinyld and rules), `verify.js` (CLD3/franc voting), `english.js` and `wordlists.js` (dictionaries), `names.js` and `namelists.js` (names), `context.js` (where text sits), `status.js` (status values and badges), `mask.js` (with the technical-term list), `rules.js`, `guard.js`, `scripts.js`, `alphabet.js`, `dates.js`. |
 | `scripts/` | `build.mjs` (esbuild bundle) and `wordlists.mjs` (generates `src/wordlists.js`). |
 | `test/` | Unit tests (Node + jsdom) and `test/e2e/` (Playwright in a real Chrome, with test pages in `test/e2e/site/`). |
 

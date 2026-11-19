@@ -105,7 +105,9 @@ const SP = `<p>Bienvenidos a nuestra tienda, aquí encontrarás todo lo que nece
   t('hints: number, price and date hints produced', on.issues.filter((i) => i.verdict === 'fmt').length === 3, JSON.stringify(on.issues.filter((i) => i.verdict === 'fmt').map((i) => i.reason)));
   t('hints: do not affect the score', on.stats.badN === 0 && on.score === 100, JSON.stringify(on.stats));
   const off = await scan(h, { lang: 'de', hints: false });
-  t('hints: off by default', !off.issues.some((i) => i.verdict === 'fmt'));
+  // number and price hints need Format hints; date and time formats are checked on every scan
+  const offFmt = off.issues.filter((i) => i.verdict === 'fmt').map((i) => i.reason);
+  t('hints: number and price hints are off by default, date hints are always on', offFmt.length === 1 && /^Date written with/.test(offFmt[0]), JSON.stringify(offFmt));
 }
 // 9. Auto-check on opted-in sites -------------------------------------------------
 {

@@ -2,6 +2,8 @@
 // (navigation, a dialog, a form…), the heading it belongs under, and the text right before and after it. Also a stable "slot" signature
 // (e.g. `span.user-name`) used to learn ignore rules from repeated Ignore clicks. Read-only: nothing on the page is changed.
 
+import { isBadge } from './status.js';
+
 const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
 const cut = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 
@@ -28,6 +30,7 @@ export function kindOf(el, attr) {
   if (attr) return ATTR_ROLE[attr] || attr;
   for (let e = el, k = 0; e && e.nodeType === 1 && k < 4; e = parentOf(e), k++) {
     const r = ARIA_ROLE[roleAttr(e)] || ROLE_OF_TAG[e.tagName];
+    if (!r && k <= 1 && isBadge(e)) return 'badge'; // a status badge, pill or chip ("Valid", "Completed")
     if (r && r !== 'paragraph' && r !== 'list item') return r;
     if (r && k === 0) return r; // a paragraph or list item only when the text sits right in it
   }
@@ -76,6 +79,19 @@ export function headingOf(el) {
   return '';
 }
 
+/** For text in a table cell: the header of its column ("Typ", "Status"), from the table's header row. */
+export function columnOf(el) {
+  let cell = null;
+  for (let e = el, k = 0; e && e.nodeType === 1 && k < 6; e = parentOf(e), k++) if (e.tagName === 'TD' || roleAttr(e) === 'cell' || roleAttr(e) === 'gridcell') { cell = e; break; }
+  const row = cell && cell.parentElement;
+  if (!row) return '';
+  const idx = [...row.children].indexOf(cell);
+  const table = cell.closest('table,[role=table],[role=grid]');
+  const head = table && [...table.querySelectorAll('tr,[role=row]')].find((r) => r.querySelector('th,[role=columnheader]'));
+  const h = head && head !== row ? head.children[idx] : null;
+  return h ? cut(clean(h.textContent), 40) : '';
+}
+
 /** For form fields: the visible label text. */
 function fieldLabel(el) {
   if (!el || !/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) return '';
@@ -108,8 +124,19 @@ export function around(node, el, n = 50) {
     texts.push({ s, before: at < 0 });
   }
   if (at < 0 && !node) at = texts.length;
-  const before = clean(texts.filter((x) => x.before).map((x) => x.s).join(' '));
-  const after = clean(texts.filter((x) => !x.before).map((x) => x.s).join(' '));
+  let before = clean(texts.filter((x) => x.before).map((x) => x.s).join(' '));
+  let after = clean(texts.filter((x) => !x.before).map((x) => x.s).join(' '));
+  // alone in its table cell ("REST API", a status badge): the rest of the row is the text around it
+  if (!before && !after) {
+    let cell = null;
+    for (let e = parentOf(host), k = 0; e && e.nodeType === 1 && k < 6; e = parentOf(e), k++) if (/^(TD|TH)$/.test(e.tagName) || /^(cell|gridcell)$/.test(roleAttr(e))) { cell = e; break; }
+    const row = cell && cell.parentElement;
+    if (row) {
+      const cells = [...row.children], at2 = cells.indexOf(cell);
+      before = clean(cells.slice(0, at2).map((c) => c.textContent).join(' '));
+      after = clean(cells.slice(at2 + 1).map((c) => c.textContent).join(' '));
+    }
+  }
   // cut at word boundaries
   const tail = (x) => { if (x.length <= n) return x; const t = x.slice(-n); const sp = t.indexOf(' '); return '…' + (sp > 0 && sp < 15 ? t.slice(sp + 1) : t); };
   const head = (x) => { if (x.length <= n) return x; const h = x.slice(0, n); const sp = h.lastIndexOf(' '); return (sp > n - 15 ? h.slice(0, sp) : h) + '…'; };
@@ -147,11 +174,12 @@ export function describe(node, el, attr) {
     const region = regionOf(el);
     const heading = kind === 'heading' ? '' : headingOf(el);
     const label = attr ? fieldLabel(el) : '';
+    const column = columnOf(el);
     const near = attr ? { before: '', after: '' } : around(node, el);
-    const path = [region, heading && `“${heading}”`, label && `field “${label}”`].filter(Boolean).join(' › ');
-    return { kind, region, heading, label, before: near.before, after: near.after, path, slot: slotOf(el) };
+    const path = [region, heading && `“${heading}”`, column && `column “${column}”`, label && `field “${label}”`].filter(Boolean).join(' › ');
+    return { kind, region, heading, label, column, before: near.before, after: near.after, path, slot: slotOf(el) };
   } catch (e) {
-    return { kind: attr || 'text', region: '', heading: '', label: '', before: '', after: '', path: '', slot: '' };
+    return { kind: attr || 'text', region: '', heading: '', label: '', column: '', before: '', after: '', path: '', slot: '' };
   }
 }
 
