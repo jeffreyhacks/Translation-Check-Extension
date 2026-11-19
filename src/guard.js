@@ -5,7 +5,7 @@ import { EN_FN } from './lexicon.js';
 import { targetCompetes } from './engine.js';
 export const HARD = /^(Looks like English text|Written in |Latin-script text|Identical to the source)/;
 const letters = (t) => (t.match(/\p{L}/gu) || []).length;
-const wordsOf = (t) => (t.match(/\p{L}[\p{L}'’-]*/gu) || []).length;
+const wordsOf = (t) => (t.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []).length;
 
 export function isShort(text) { return wordsOf(text) <= 2 && letters(text) < 16; }
 
@@ -24,7 +24,7 @@ function agreedPhrase(text, v, lang, related) {
 export function guardShort(text, v, lang, related = true) {
   if (!v || v.v !== 'bad' || HARD.test(v.reason || '') || !isShort(text)) return v;
   if (v.notEnglish) return v; // English check: not a word of English, and two models name the page's own language (see verify.js)
-  const lower = (text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || []);
+  const lower = (text.toLowerCase().match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []);
   if (lower.some((w) => w.length >= 3 && EN_FN.has(w))) return v; // contains an unmistakably English word ("save", "welcome", "cancel")
   if (lang && agreedPhrase(text, v, lang, related)) return v;
   return { v: 'unsure', reason: 'Short word shared by several languages', votes: v.votes, guarded: true, was: { detected: v.detected, sT: v.sT, sO: v.sO, confirmed: v.confirmed } };

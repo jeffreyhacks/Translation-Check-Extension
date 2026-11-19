@@ -74,7 +74,7 @@ function englishScore(words, lang) {
 
 // How much of a text is clearly English wording, and how much of it is the target language's own function words.
 export function englishHits(text, lang) {
-  const words = text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
+  const words = text.toLowerCase().match(/\p{L}[\p{L}\p{M}'’-]*/gu) || [];
   const { strong } = englishScore(words, lang);
   return { strong, own: Math.max(...groupOf(lang).map((g) => stopHits(words, g))) };
 }
@@ -85,7 +85,7 @@ export function targetCompetes(text, lang, other, related = true) {
   const only = [...new Set([...eq, other])].filter((l) => TINY.has(l));
   if (!only.length || !other) return 0;
   let n = 0;
-  for (const w of text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || []) {
+  for (const w of text.toLowerCase().match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []) {
     let sT = 0, sO = 0;
     for (const r of detectAll(w, { only })) { const l = norm(r.lang); if (eq.includes(l)) sT = Math.max(sT, r.accuracy); else if (l === other) sO = r.accuracy; }
     if (sT > 0 && sT >= sO * 0.7) n++;
@@ -131,7 +131,7 @@ export function createEngine(cld = async () => null) {
       const top = detectAll(t)[0];
       if (top && top.accuracy >= 0.5) {
         const l = norm(top.lang);
-        const words = t.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
+        const words = t.toLowerCase().match(/\p{L}[\p{L}\p{M}'’-]*/gu) || [];
         const real = group.includes(l) || implausible(t, l) || !confirmedOther(t, words, group, l) ? group[0] : l; // unconfirmed or letter-implausible guesses count as the target
         tally[real] = (tally[real] || 0) + t.length; total += t.length;
       }
@@ -156,7 +156,7 @@ export function createEngine(cld = async () => null) {
   }
 
   async function latin(text, lang, ctx, nonLatinTarget) {
-    const words = text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
+    const words = text.toLowerCase().match(/\p{L}[\p{L}\p{M}'’-]*/gu) || [];
     const group = groupOf(lang);
     const rel = ctx?.related === false ? [] : relatedOf(lang);
     const eq = [...group, ...rel]; // counts as "the target" when judging short text
@@ -250,7 +250,7 @@ export function createEngine(cld = async () => null) {
       // letters it lacks: drop the claim. Plain a-z with none of its marks ("Czech" for Dutch compounds): name the next plausible language instead,
       // and keep the warning only if that language really beats the target head-to-head.
       if (!impossible(text, norm(v.detected))) {
-        const group = groupOf(lang), words = text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
+        const group = groupOf(lang), words = text.toLowerCase().match(/\p{L}[\p{L}\p{M}'’-]*/gu) || [];
         const pool = [...new Set([...group, ...LATIN_COMMON])].filter((l) => l !== norm(v.detected) && TINY.has(l) && !implausible(text, l));
         const alt = detectAll(text, { only: pool }).map((r) => norm(r.lang)).find((l) => !group.includes(l) && !relatedOf(lang).includes(l) && plausible(l));
         if (alt && confirmedOther(text, words, group, alt)) return { ...v, detected: relabel(words, alt) };

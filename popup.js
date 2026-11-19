@@ -80,7 +80,12 @@ function likelyWrongTarget() {
   let total = 0;
   for (const i of result.issues) if (i.verdict === 'bad' && /^[a-z]{2,3}$/.test(i.detected || '')) { tally[i.detected] = (tally[i.detected] || 0) + i.len; total += i.len; }
   const [top, w] = Object.entries(tally).sort((a, b) => b[1] - a[1])[0] || [];
-  return top && w / total >= 0.7 && top !== result.lang && LANGS.includes(top) ? top : null;
+  if (!top || w / total < 0.7 || top === result.lang || !LANGS.includes(top)) return null;
+  // judged against all the checked text, not just the flagged text: English project names on a page that is mostly Hindi
+  // are mostly English among the warnings, but the page itself is not mostly English
+  const checked = (result.stats.ok || 0) + (result.stats.bad || 0);
+  const share = checked ? w / checked : 0;
+  return share > 0.5 && w > (result.stats.ok || 0) ? { lang: top, share: Math.round(share * 100) } : null;
 }
 
 function renderChips() {
@@ -99,6 +104,14 @@ function renderChips() {
   if (stats.acceptedN) { // untranslated text you OK'd: listed under Ignored, but still not translated, so it keeps the score below 100%
     const one = stats.acceptedN === 1;
     const c = chip('', `${stats.acceptedN} accepted untranslated`, `${one ? 'This untranslated text was' : `These ${stats.acceptedN} untranslated texts were`} accepted with OK or Ignore. ${one ? 'It is' : 'They are'} listed in the Ignored tab and still count as not translated in the score. Click to see ${one ? 'it' : 'them'}.`, 'accepted');
+    c.setAttribute('role', 'button'); c.tabIndex = 0;
+    const open = () => { view = 'skip'; cursor = -1; occAt.clear(); render(); };
+    c.addEventListener('click', open);
+    c.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+    box.append(c);
+  }
+  if (stats.unconfirmedN) {
+    const c = chip('', `${stats.unconfirmedN} unconfirmed hidden`, `Confirmed warnings only is on: ${stats.unconfirmedN} ${stats.unconfirmedN === 1 ? 'warning' : 'warnings'} that a second model doesn’t back ${stats.unconfirmedN === 1 ? 'is' : 'are'} hidden. They are listed in the Ignored tab. Click to see them.`, 'accepted');
     c.setAttribute('role', 'button'); c.tabIndex = 0;
     const open = () => { view = 'skip'; cursor = -1; occAt.clear(); render(); };
     c.addEventListener('click', open);
@@ -128,6 +141,10 @@ function render() {
   $('#result').hidden = false;
   const { stats, score } = result;
   $('#score').textContent = score == null ? '–' : score + '%';
+  // how the score is worked out: by the amount of text, not by the number of items, so it can't be recomputed from the counts beside it
+  $('#score').title = score == null ? '' : `Share of the checked text that is in ${nameOf(result.lang)}, by length: translated ÷ (translated + not translated). `
+    + 'Long text weighs more than short text, so it can differ from the counts. Unclear and ignored text are left out'
+    + (stats.acceptedN ? ', except untranslated text you accepted, which still counts as not translated.' : '.');
   const arc = $('#arc');
   arc.setAttribute('stroke-dasharray', `${score ?? 0} 100`);
   arc.style.stroke = score == null ? 'var(--track)' : score >= 90 ? 'var(--ok)' : score >= 60 ? '#e0a100' : 'var(--bad)';
@@ -137,11 +154,12 @@ function render() {
   renderChips();
   renderCoverage();
 
-  const fix = likelyWrongTarget();
+  const wrong = likelyWrongTarget(), fix = wrong && wrong.lang;
   $('#mismatch').hidden = !fix;
   if (fix) {
     const declared = (result.pageLang || '').toLowerCase().split('-')[0] === fix;
-    $('#mismatchText').textContent = `Mostly ${nameOf(fix)}${declared ? ' — the page’s own language' : ''}. Wrong target?`;
+    $('#mismatchText').textContent = `Mostly ${nameOf(fix)} (${wrong.share}% of the text)${declared ? ' — the page’s own language' : ''}. Wrong target?`;
+    $('#mismatchText').title = `${wrong.share}% of the checked text looks ${nameOf(fix)}, more than is in ${nameOf(result.lang)}`;
     $('#mismatchFix').textContent = `Check for ${nameOf(fix)}`;
     $('#mismatchFix').onclick = () => { setLang(fix); save().then(() => runScan()); };
   }

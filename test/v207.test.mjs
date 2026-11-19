@@ -121,5 +121,25 @@ const point = async (h, text) => {
   t('score: 100% when nothing is untranslated', clean.stats.badN === 0 && clean.score === 100, JSON.stringify({ score: clean.score, badN: clean.stats.badN }));
 }
 
+// ---------- reported: Hindi Project Management page ("Mostly English", counts, Confirmed warnings only, "hi") ----------
+{
+  const HI = fs.readFileSync('test/e2e/site/hi-projects.html', 'utf8');
+  const hiOpts = { type: 'scan', attrs: true, unsure: true, mode: 'strict', source: false, live: false, verify: true, confirmedOnly: true, related: true, hints: true };
+  const scanHi = (lang, o = {}) => loadNew(HI, { url: 'https://knowledge-harvestor.artisanscloud.com/admin/project-management/' }).call({ ...hiOpts, lang, ...o });
+  const hi = await scanHi('hi'), en = await scanHi('en');
+  const codeSkips = (r) => r.ignored.filter((i) => /\p{Script=Devanagari}/u.test(i.text) && /^Code/.test(i.reason)).map((i) => `${i.text} (${i.reason})`);
+  // vowel signs and the virama are combining marks: "सेटिंग्स" has no two letters in a row and was set aside as a code
+  t('Hindi words are judged, never set aside as codes', !codeSkips(hi).length && !codeSkips(en).length, JSON.stringify([codeSkips(hi), codeSkips(en)]));
+  t('Hindi words: translated on a Hindi check, not translated on an English check', hi.stats.okN > en.stats.okN && en.stats.badN > hi.stats.badN
+    && en.issues.some((i) => i.text === 'पूर्ण' && i.verdict === 'bad'), JSON.stringify([hi.stats, en.stats]));
+  t('Confirmed warnings only: no unconfirmed warning is listed, they are counted under Ignored', !hi.issues.some((i) => /Not confirmed/.test(i.reason || ''))
+    && hi.stats.unconfirmedN > 0 && hi.ignored.some((i) => /Not confirmed by a second model/.test(i.reason)), JSON.stringify(hi.issues.filter((i) => /Not confirmed/.test(i.reason || '')).map((i) => i.text)));
+  const off = await scanHi('hi', { confirmedOnly: false });
+  t('Confirmed warnings only off: nothing is hidden', !off.stats.unconfirmedN && !off.ignored.some((i) => /Not confirmed/.test(i.reason)));
+  t('language menu code "hi" is set aside as a language code', hi.ignored.some((i) => i.text === 'hi' && /Language code/.test(i.reason)) && !hi.issues.some((i) => i.text === 'hi'));
+  const words = await loadNew('<html lang="en"><body><main><p>यह पृष्ठ हिंदी में है और इसमें कई वाक्य हैं जो अनुवादित हैं।</p><button>Hi</button><button>No</button><a href="#">de</a></main></body></html>').call({ ...hiOpts, lang: 'hi', confirmedOnly: false });
+  t('language codes: Title-case words ("Hi", "No") are still judged, other codes are not set aside', !words.ignored.some((i) => /Language code/.test(i.reason)), JSON.stringify(words.ignored));
+}
+
 console.log(`\n2.0.7: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

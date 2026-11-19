@@ -33,7 +33,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
 
   const tick = () => new Promise((r) => setTimeout(r, 0));
   const clean = (s) => s.replace(/\s+/g, ' ').trim();
-  const words = (s) => (s.match(/\p{L}+/gu) || []).length;
+  const words = (s) => (s.match(/\p{L}[\p{L}\p{M}]*/gu) || []).length;
   const otherVotes = (v) => (v && v.votes ? ['cld3', 'franc', 'tinyld'].filter((k) => v.votes[k] === 'other').length : 0);
   const nk = (s) => clean(s).toLowerCase();
   const send = (m) => { try { const p = api.runtime.sendMessage(m); return p && p.then ? p : Promise.resolve(p); } catch (e) { return Promise.reject(e); } };
@@ -173,6 +173,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       // learned from earlier Ignore clicks (codes, versions, a page slot such as `span.user-name`): skipped like ignored terms
       // (kept as an Ignored item with its reason, so it is counted and exported instead of silently dropped)
       if (!state.okSet.has(nk(it.text)) && state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host)) { state.learnedN++; it.base = { v: 'skip', reason: 'Ignored by a rule learned from your Ignore clicks' }; it.j = ''; it.len = 0; keep.push(it); continue; }
+      // a language menu's own code ("hi", "HI", "IN HI"): the target's or the page's language code, alone on a button, link or menu item
+      if (langCodeLabel(it, p)) { it.base = { v: 'skip', reason: 'Language code (language menu)' }; it.j = ''; it.len = 0; keep.push(it); continue; }
       if (p.bugs) {
         const b = detectBug(it.text);
         if (b) { it.base = { v: 'bug', reason: b }; it.j = ''; it.len = it.text.length; keep.push(it); continue; }
@@ -187,11 +189,11 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       // On a page in another script, a one-word BrandCase title ("HomeIoT", "TrueCost") is judged as it is instead of being skipped as a brand:
       // built-in brands (WhatsApp, YouTube…) are still recognised as names, anything else is listed for a decision.
       if (p.lang !== 'en' && latinOnly(it.text) && !(termRe && termRe.test(it.text))) {
-        if (!/\p{L}{2}/u.test(m.text) && /^[A-Z]?[a-z]+(?:[A-Z][a-z0-9]*)+$/.test(it.text)) { m = { text: it.text, nameLike: true }; it.title = true; }
+        if (!/\p{L}\p{M}*\p{L}/u.test(m.text) && /^[A-Z]?[a-z]+(?:[A-Z][a-z0-9]*)+$/.test(it.text)) { m = { text: it.text, nameLike: true }; it.title = true; }
         // a short title that masking cut down to one word ("Home IOT" -> "Home") is judged whole: the single word left says nothing
         else if (!nonLatinTarget(p.lang) && m.removed && words(it.text) >= 2 && words(it.text) <= 4 && words(m.text) === 1 && !/\d/.test(it.text)) { it.jPart = m.text; m = { text: it.text, nameLike: true }; it.title = true; }
       }
-      if (!/\p{L}{2}/u.test(m.text)) {
+      if (!/\p{L}\p{M}*\p{L}/u.test(m.text)) {
         if (it.fmt || dateStyle(it.text)) { it.base = { v: 'skip', reason: 'Date or time (its format is checked under Format)' }; it.j = ''; it.len = 0; it.dateOnly = true; keep.push(it); continue; }
         // nothing left to judge (a code, an ID, a technical term, an ignored term): an Ignored item with the reason, never a silent drop
         if (/\p{L}/u.test(it.text)) { ign++; it.base = { v: 'skip', reason: skipReason(it.text, p, it.accepted) }; it.j = ''; it.len = 0; keep.push(it); }
@@ -201,6 +203,16 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       keep.push(it);
     }
     return { keep, ign };
+  }
+
+  // Lowercase or uppercase only, so a Title-case word ("Hi", "No") on a button is still judged as a word.
+  function langCodeLabel(it, p) {
+    const t = it.text.trim();
+    if (!/^(?:[a-z]{2,3}|[A-Z]{2,3}(?:[\s_|/-]+[A-Z]{2,3})?|[a-z]{2,3}(?:[_-][A-Za-z]{2})?)$/.test(t)) return false;
+    const own = new Set([p.lang, (document.documentElement.lang || '').toLowerCase().split('-')[0]].filter(Boolean));
+    if (!t.toLowerCase().split(/[\s_|/-]+/).some((c) => own.has(c))) return false;
+    const el = it.el || it.node?.parentElement || it.node?.parentNode?.host;
+    return !!el?.closest?.('button, a, option, select, summary, [role=button], [role=menuitem], [role=option], [role=tab], [aria-haspopup]');
   }
 
   // Why text was set aside before judging (the masks only remove; this names what removed it).
@@ -445,7 +457,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
   }
 
-  const titleCase = (t) => { const ws = t.match(/\p{L}[\p{L}'’-]*/gu) || []; return ws.length > 0 && ws.filter((w) => /^\p{Lu}/u.test(w)).length >= Math.ceil(ws.length * 0.6); };
+  const titleCase = (t) => { const ws = t.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []; return ws.length > 0 && ws.filter((w) => /^\p{Lu}/u.test(w)).length >= Math.ceil(ws.length * 0.6); };
 
   // Items of the same kind in the same list are judged consistently: a table column, or a repeated slot (same element and class). When most of
   // the column is names or titles that are flagged or held for a decision, the others there that are still unclear are held too (never assumed
@@ -501,7 +513,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const assume = state.p.mode === 'relaxed' || (state.p.mode === 'balanced' && tendency !== null && tendency >= 0.6);
     state.assumedN = 0;
     if (state.p.confirmedOnly && state.p.verify) {
-      for (const it of state.items) if (it.base.v === 'bad' && it.base.votes && !it.base.confirmed) it.base = { v: 'unsure', reason: 'Not confirmed by a second model', votes: it.base.votes };
+      // "Shows only warnings that at least two models back": an unconfirmed warning is hidden from the lists (it used to move to Unclear,
+      // where it was still shown) and is never assumed translated; it stays counted, under Ignored with its reason, so nothing is dropped silently
+      for (const it of state.items) if (it.base.v === 'bad' && it.base.votes && !it.base.confirmed) it.base = { v: 'skip', reason: 'Not confirmed by a second model (Confirmed warnings only is on)', votes: it.base.votes, unconfirmed: true };
     }
     for (const it of state.items) {
       // (Latin letters on a page in another script are never assumed translated)
@@ -657,7 +671,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     state.allIgnored = group(ignored).slice(0, 5000);
     issueById = new Map(issues.map((i) => [i.id, i]));
     // "skipped" chip: codes, technical terms and ignored terms actually set aside in the end (not dates, not rules learned from Ignore)
-    stats.ignoredN = state.items.filter((it) => it.v.v === 'skip' && !it.dateOnly && !/learned/.test(it.v.reason || '') && nodeOf(it).isConnected).length;
+    stats.ignoredN = state.items.filter((it) => it.v.v === 'skip' && !it.dateOnly && !it.v.unconfirmed && !/learned/.test(it.v.reason || '') && nodeOf(it).isConnected).length;
+    // warnings hidden by "Confirmed warnings only": their own chip, so the hidden count is visible
+    stats.unconfirmedN = state.items.filter((it) => it.v.v === 'skip' && it.v.unconfirmed && nodeOf(it).isConnected).length;
     stats.scannedN = stats.okN + stats.badN + stats.unsureN + stats.bugN + stats.nameN + stats.skipN; // every text item, in exactly one category
     for (const g of groups.slice(0, 300)) withContext(g, 12);
     // English you OK'd is still English on the page: it stays in the score (as not translated), it just isn't listed as a problem any more
