@@ -26,10 +26,10 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
   const w = dom.window;
   const store = { ...(o.store || {}) }, sent = [], reg = [], downloads = [], updates = [], clip = [], perms = [], removed = [], runtimeSent = [];
   let permAnswer = true, contains = o.contains !== false;
-  let msgL, fetchOk = true;
+  let msgL, fetchOk = true, storageL = null;
   w.chrome = {
     i18n: { getUILanguage: () => 'en-US' },
-    storage: { local: { get: async () => store, set: async (o) => Object.assign(store, o) } },
+    storage: { local: { get: async () => store, set: async (o) => Object.assign(store, o) }, onChanged: { addListener: (f) => (storageL = f) } },
     tabs: { query: async () => [{ id: 5, url: tabUrl }], update: async (id, o) => updates.push([id, o]),
       sendMessage: async (id, m) => { sent.push(m); const R = o.result || RESULT; return m.type === 'scan' ? R : m.type === 'status' ? { result: null } : m.type === 'export' ? (o.export || { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: R.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) }) : { ok: true }; },
       onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
@@ -67,7 +67,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
   const scanBtn = w.document.querySelector('#scan');
   let permAtClick = -1;
   if (scanBtn) { const orig = scanBtn.click.bind(scanBtn); scanBtn.click = () => { orig(); permAtClick = perms.length; }; } // perms requested synchronously in the click
-  return { get permAtClick() { return permAtClick; }, get fetchesBeforeGrant() { return fetchesBeforeGrant; }, fetches: () => fetchN, w, d: w.document, store, sent, reg, downloads, updates, clip, perms, removed, pdfCalls, runtimeSent, denyPerms: () => (permAnswer = false), failFetch: () => (fetchOk = false), msg: (m, s) => msgL(m, s), $: (s) => w.document.querySelector(s) };
+  return { get permAtClick() { return permAtClick; }, get fetchesBeforeGrant() { return fetchesBeforeGrant; }, fetches: () => fetchN, w, d: w.document, store, sent, reg, downloads, updates, clip, perms, removed, pdfCalls, runtimeSent, denyPerms: () => (permAnswer = false), failFetch: () => (fetchOk = false), msg: (m, s) => msgL(m, s), storageChanged: (ch) => storageL && storageL(ch, 'local'), $: (s) => w.document.querySelector(s) };
 }
 const readBlob = (w, blob, as = 'text') => new Promise((res) => { const r = new w.FileReader(); r.onload = () => res(r.result); if (as === 'text') r.readAsText(blob); else r.readAsArrayBuffer(blob); });
 const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.textContent).join(' | ');
@@ -380,6 +380,29 @@ const G = {
   t('csv connectors: selectors start at #root', rows.every((r) => col(r, 'selector').startsWith('#root')));
   const m = row('Übersicht');
   t('csv connectors: a marked row keeps the models\' reason next to yours', m && /^Marked untranslated by you; models: \S/.test(col(m, 'reason')), m && col(m, 'reason'));
+}
+
+// ---------- reported: German "Projekte" list — coverage, legend, ignored rows in the CSV, orange marks on by default ----------
+{
+  const page = loadNew(fs.readFileSync('test/e2e/site/de-projects.html', 'utf8'), { url: 'https://knowledge-harvestor.artisanscloud.com/admin/projects' });
+  const res = await page.call({ type: 'scan', lang: 'de', attrs: true, unsure: true, mode: 'balanced', source: false, live: false, ignore: ['Wisight'] });
+  const ex = await page.call({ type: 'export' });
+  const p = await boot('popup.html', ex.url, { result: res, export: ex, store: { opts: { lang: 'de', unsure: false } } });
+  t('projects popup: "Mark unclear text" is switched on once for existing settings', p.$('#unsure').checked && p.store.opts.unclearMarks === 2 && p.store.opts.unsure === true, JSON.stringify(p.store.opts));
+  p.$('#scan').click(); await sleep(60);
+  const cov = p.$('#coverage');
+  const s = res.stats;
+  t('projects popup: coverage line adds up', !cov.hidden && cov.textContent.startsWith(`${s.scannedN} scanned`) && cov.textContent.includes(`${s.unsureN} unclear`) && cov.textContent.includes(`${s.nameN + s.skipN} ignored`), cov.textContent);
+  t('projects popup: legend explains the underlines', /Not translated/.test(p.$('#legend').textContent) && /Unclear/.test(p.$('#legend').textContent) && p.$('#legend .lg.unsure'));
+  p.$('#expCsv').click(); await sleep(50);
+  const csv = (await readBlob(p.w, p.downloads.find((d) => d.size))).replace(/^﻿/, '');
+  const rows = csv.split('\r\n').slice(1);
+  t('projects csv: unclear rows are in the export with a reason', rows.some((r) => r.startsWith('"Can’t tell","Smart Service Analytics","Name or title')), rows.filter((r) => /Smart/.test(r)).join('\n'));
+  t('projects csv: ignored rows are in the export with a reason', rows.some((r) => r.startsWith('"Ignored","Wisight","On your ignore list"')) && rows.some((r) => /^"Ignored","\d\d\.\d\d\.2026","Date or time/.test(r)), rows.filter((r) => r.startsWith('"Ignored"')).slice(0, 3).join('\n'));
+  // a decision made on the page (hover card) reaches this window through storage
+  p.storageChanged({ marked: { newValue: { global: [], sites: { 'knowledge-harvestor.artisanscloud.com': ['Smart Service Analytics'] } } } });
+  p.$('#settingsBtn').click();
+  t('projects popup: a decision made on the page shows up in the marked list here', p.$('#markedSite').value === 'Smart Service Analytics', p.$('#markedSite').value);
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

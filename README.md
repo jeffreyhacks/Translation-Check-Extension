@@ -22,8 +22,8 @@ The popup shows a score (the share of the page's text that is in the target lang
 
 | Tab | What it lists |
 |---|---|
-| **Untranslated** | Text in another language than the target. Highlighted in yellow on the page. |
-| **Unclear** | Text the models can't judge with confidence (very short text, names, words shared by several languages). |
+| **Untranslated** | Text in another language than the target. Highlighted in yellow with a red wavy underline on the page. |
+| **Unclear** | Text the models can't judge with confidence (very short text, names and titles, words shared by several languages), always with a reason. An orange wavy underline on the page. |
 | **Broken** | Leaked translation keys (`checkout.button.save`), unfilled placeholders (`{{name}}`, `%s`, `{0}`), `undefined`/`NaN`, `[object Object]` and missing-translation markers. Shown only when something is found. |
 | **Format** | Date and time formats that don't fit the language (always checked), and number and price formats (with *Format hints* on). Shown when something is found. |
 
@@ -33,6 +33,18 @@ Click a row to scroll to it on the page; **‹ ›** step through the list. Each
 - **why it was flagged**: *Looks like English text*, *Name or title? Two language models read it as English*, *Identical to the source-language page*, and so on.
 
 Chips under the score summarise the check: the language checked, how many names and codes were skipped, and whether live updates are on.
+
+### Coverage: nothing is skipped silently
+Every text item the check finds ends up in exactly one category, and the line under the chips counts them:
+*71 scanned · 33 translated · 7 not translated · 13 unclear · 18 ignored*. If the numbers didn't add up, something would have been
+skipped. **Ignored** covers names, codes and IDs, technical terms, dates and times (their format is checked under Format), your ignore
+list and rules learned from it; each is exported with its reason. A legend above the list shows what the underlines on the page mean.
+
+### On the page
+Untranslated text keeps its yellow highlight and red wavy underline; unclear text gets an orange wavy underline (with *Mark unclear text*,
+on by default). Point at underlined text to see a small card with the reason and how many models read another language, and decide there:
+**Not translated** (unclear text: listed as untranslated on every check of the site), **OK** (put on this site's ignore list) or **Unmark**.
+The decision goes into the same lists as the popup's buttons, the page is checked again, and an open popup or side panel follows.
 
 ### Repeated text
 The same text with the same verdict is one row, marked **×N**. Click it again (or use **‹ ›** under it, *Copy 2 of 3*) to visit each place it
@@ -59,7 +71,8 @@ Broad shapes such as "a capitalised word" are never learned, because they would 
 learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
 
 ### Exports
-- **CSV**: one row per finding, with type, text, reason, detected language, model agreement, element type (*where*: tab, heading, table cell,
+- **CSV**: one row per finding, untranslated, unclear and ignored items alike (each with its reason, so the export matches the coverage
+  count), with type, text, reason, detected language, model agreement, element type (*where*: tab, heading, table cell,
   badge, button, placeholder…), CSS selector, page, number of copies, context, surrounding text and every location. No field is left empty
   (*unknown* when no language could be named, *n/a* where a column doesn't apply) and no field contains a line break: several locations are
   separated by ` | `, one per copy in both *context* and *all locations*. Selectors are full paths from the nearest id (`#root > …`). For
@@ -73,13 +86,13 @@ learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
 | Group | Setting | What it does |
 |---|---|---|
 | Strictness | **Relaxed** | Assumes unclear text is translated. Fewest warnings. |
-| | **Balanced** (default) | Assumes very short unclear text is translated when the rest of the page clearly is. |
+| | **Balanced** (default) | Assumes very short unclear text (one or two short words) is translated when the rest of the page clearly is. Longer unclear text is always listed. |
 | | **Strict** | Lists everything unclear. |
 | Detection | **Double-check with CLD3 + franc** | Two more language models review every warning. |
 | | **Confirmed warnings only** | Shows only warnings that at least two models back. |
 | | **Accept related languages** | Treats close relatives (Spanish/Portuguese, Danish/Norwegian) as the target. |
 | On the page | **Placeholders & tooltips** | Also checks alt text, placeholders, titles and accessible labels. |
-| | **Mark unclear text** | Highlights unclear text on the page as well. |
+| | **Mark unclear text** | Underlines unclear text on the page in orange (on by default). |
 | | **Live updates** | Checks text that appears or changes after the check. |
 | | **Compare with source language** | Flags text identical to the page's English (`hreflang`) version. |
 | | **Format hints** | Checks number and price formats. Date and time formats are checked on every scan. |
@@ -97,7 +110,7 @@ learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
    Close relatives count as one answer (CLD3's "Norwegian" agrees with tinyld's "Danish"). A model that abstains or names an unrelated
    language is asked again head-to-head: *the target, or the page's source language?* That answer only backs up the dictionary and never
    counts as agreement on its own.
-4. **Page-level evidence** comes last: the sentence around a short string, the section a lone word sits in, the page's source-language
+4. **Page-level evidence** comes last: the sentence around a short string, the section a lone word or two-word label sits in, the page's source-language
    version, and (in Balanced mode) the page as a whole for very short strings.
 
 ### Dictionaries and letters
@@ -143,6 +156,14 @@ People, places and brands read the same in every language, so they are neither t
 (*5 names*), never highlighted, and don't affect the score. A name is recognised from built-in lists (about 13,000 given names and
 13,000 surnames from 70 locales, cities, brands, common Malay names) or by its shape: capitalised words that are not ordinary vocabulary and
 that the models can't agree on. Interface wording such as "Order History" is a label, not a name, and is still checked.
+
+### Lists and table columns are judged together
+Items in the same table column, or in the same repeated slot (cards, list items with the same element and class), are treated
+consistently. When at least two of them, and 40% or more, are names or titles that are flagged or held for a decision, the others there that are
+still unclear are held as well: never assumed translated or cleared by their section ("Smart Service Analytics", "Solan → Bhayla
+Manufacturing Transition" in a column of English project names). A code-like name there that would otherwise be skipped ("Testproj123")
+is listed as unclear (*Name or code?*). Text the models read as the page's language keeps its verdict, and a column of real codes
+(`AB-1001`, `ZX-2002`) stays ignored. This uses only the page's own structure, so it works the same on any site.
 
 ### Status values
 Status values ("Valid", "Completed", "In progress") come from the app's data and sit in badges, pills and table cells. A model can't place
