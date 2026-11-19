@@ -45,10 +45,11 @@
     <div class="grp">
       <h2>On the page</h2>
       <label class="opt"><input type="checkbox" id="attrs" checked><i></i><span class="txt"><span class="t">Placeholders &amp; tooltips</span><span class="d">Also check alt text, placeholders and titles</span></span></label>
-      <label class="opt"><input type="checkbox" id="unsure"><i></i><span class="txt"><span class="t">Mark unclear text</span><span class="d">Highlight text that can’t be judged</span></span></label>
+      <label class="opt"><input type="checkbox" id="unsure" checked><i></i><span class="txt"><span class="t">Mark unclear text</span><span class="d">Orange wavy underline under text that can’t be judged</span></span></label>
+      <label class="opt"><input type="checkbox" id="hoverCard" checked><i></i><span class="txt"><span class="t">Card on underlined text</span><span class="d">Show a card with the reason and buttons when pointing at underlined text</span></span></label>
       <label class="opt"><input type="checkbox" id="live" checked><i></i><span class="txt"><span class="t">Live updates</span><span class="d">Re-check as the page changes</span></span></label>
       <label class="opt"><input type="checkbox" id="source" checked><i></i><span class="txt"><span class="t">Compare with source language</span><span class="d">Uses the page’s hreflang alternate</span></span></label>
-      <label class="opt"><input type="checkbox" id="hints"><i></i><span class="txt"><span class="t">Format hints</span><span class="d">Number, price and date formats</span></span></label>
+      <label class="opt"><input type="checkbox" id="hints"><i></i><span class="txt"><span class="t">Format hints</span><span class="d">Number and price formats (dates and times are always checked)</span></span></label>
     </div>
     <div class="grp">
       <h2>This site</h2>
@@ -87,6 +88,7 @@
     </div>
 
     <div class="chips" id="chips"></div>
+    <p class="coverage" id="coverage" hidden></p>
 
     <div id="mismatch" class="banner" hidden>
       <span id="mismatchText"></span>
@@ -102,6 +104,7 @@
       <button role="tab" id="tabUnsure" aria-selected="false" title="Can’t tell"><i class="dot unsure"></i><span class="lbl">Unclear</span><span class="n">0</span></button>
       <button role="tab" id="tabBug" aria-selected="false" title="Broken text" hidden><i class="dot bug"></i><span class="lbl">Broken</span><span class="n">0</span></button>
       <button role="tab" id="tabFmt" aria-selected="false" title="Format hints" hidden><i class="dot fmt"></i><span class="lbl">Format</span><span class="n">0</span></button>
+      <button role="tab" id="tabSkip" aria-selected="false" title="Ignored" hidden><i class="dot skip"></i><span class="lbl">Ignored</span><span class="n">0</span></button>
     </div>
     <div class="nav">
       <button id="prev" class="icon sm" title="Previous"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
@@ -111,6 +114,7 @@
       <button id="expCsv" class="ghost" title="Download CSV"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>CSV</button>
       <button id="expHtml" class="ghost" title="Download HTML report"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>Report</button>
     </div>
+    <p class="legend" id="legend"><span class="lg bad"><i></i>Not translated</span><span class="lg unsure"><i></i>Unclear</span><span class="lg-tip" id="legendTip">Point at underlined text on the page to decide</span></p>
     <ul id="list"></ul>
   </section>
 

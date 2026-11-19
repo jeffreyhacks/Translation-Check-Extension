@@ -33,13 +33,25 @@ export function detectBug(text) {
 }
 
 const cache = new Map();
+// Month names in English, for the US date order check ("Nov 13, 2026"). Built from Intl so abbreviations match what apps print.
+const EN_MONTHS = (() => {
+  const out = new Set();
+  try { for (let m = 0; m < 12; m++) for (const month of ['long', 'short']) out.add(new Intl.DateTimeFormat('en', { month }).format(new Date(2026, m, 15)).replace(/\.$/, '')); } catch (e) { /* no Intl */ }
+  out.add('Sept');
+  return [...out].sort((a, b) => b.length - a.length);
+})();
+const US_DATE = new RegExp(`(?<![\\p{L}\\d])(?:${EN_MONTHS.join('|')})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?,\\s*\\d{4}(?!\\d)`, 'u');
+const TIME_12H = /(?<!\d)\d{1,2}:\d{2}(?::\d{2})?\s?(?:[AaPp]\.?[Mm]\.?)(?![\p{L}])/u;
 function localeInfo(lang) {
   if (cache.has(lang)) return cache.get(lang);
   let info = null;
   try {
     const nf = new Intl.NumberFormat(lang).formatToParts(1234567.5);
     const df = new Intl.DateTimeFormat(lang, { dateStyle: 'short' }).formatToParts(new Date(2026, 10, 25));
+    const md = new Intl.DateTimeFormat(lang, { month: 'short', day: 'numeric', year: 'numeric' }).formatToParts(new Date(2026, 10, 25)).map((p) => p.type);
     info = {
+      monthFirst: md.indexOf('month') < md.indexOf('day'),
+      h12: new Intl.DateTimeFormat(lang, { hour: 'numeric' }).resolvedOptions().hour12 === true,
       dec: nf.find((p) => p.type === 'decimal')?.value,
       grp: nf.find((p) => p.type === 'group')?.value,
       dsep: (df.find((p) => p.type === 'literal')?.value || '/').trim()[0] || '/',
@@ -50,11 +62,18 @@ function localeInfo(lang) {
 }
 const nice = (c) => (c === ',' ? 'comma' : c === '.' ? 'period' : /\s/.test(c) ? 'space' : c);
 
-/** @returns {string[]} low-confidence hints about number/date/currency formatting for `lang` */
-export function formatHints(text, lang) {
+/** @returns {string[]} low-confidence hints about number/date/currency formatting for `lang`.
+ *  `numbers: false` leaves out the number and price checks (dates and times are checked on every scan; numbers only with Format hints on). */
+export function formatHints(text, lang, { numbers = true, dates = true } = {}) {
   const L = localeInfo(lang);
   if (!L || text.length > 300) return [];
   const out = [];
+  if (numbers) numberHints(text, lang, L, out);
+  if (dates) dateHints(text, lang, L, out);
+  return out;
+}
+
+function numberHints(text, lang, L, out) {
   if (L.grp && L.grp !== ',' && (/\d{1,3}(?:,\d{3}){2,}(?:\.\d+)?/.test(text) || /\d{1,3}(?:,\d{3})+\.\d{1,2}\b/.test(text))) {
     out.push(`Number uses a comma as thousands separator; ${lang} uses a ${nice(L.grp)}`);
   }
@@ -64,9 +83,28 @@ export function formatHints(text, lang) {
   if (L.dec === '.' && (/[€$£]\s?\d+,\d{2}\b/.test(text) || /\b\d+,\d{2}\s?[€$£]/.test(text))) {
     out.push(`Price uses a comma as decimal separator; ${lang} uses a period`);
   }
+}
+
+function dateHints(text, lang, L, out) {
+  const base = String(lang).toLowerCase().split(/[-_]/)[0];
   const em = englishMonths(text, lang);
   if (em.length) out.push(`Date uses an English month name (${em.join(', ')})`);
   const d = text.match(/\b\d{1,2}([/.-])\d{1,2}\1\d{4}\b/);
   if (d && d[1] !== L.dsep) out.push(`Date written with "${d[1]}"; ${lang} usually uses "${L.dsep}"`);
-  return out;
+  // "Nov 13, 2026": English month-day-year order, on a page whose language puts the day first ("13. Nov. 2026")
+  if (base !== 'en' && !L.monthFirst && US_DATE.test(text)) out.push(`Date in English order (month day, year); ${lang} puts the day first`);
+  // "08:38 PM": 12-hour clock on a page whose language uses the 24-hour clock ("20:38")
+  if (base !== 'en' && !L.h12 && TIME_12H.test(text)) out.push(`Time uses the 12-hour clock (AM/PM); ${lang} uses the 24-hour clock`);
+}
+
+/** How a date in `text` is written, to spot pages that mix formats: 'numeric /', 'numeric .', 'numeric -', 'ISO', 'month name, month first',
+ *  'month name, day first', or '' when there is no date. */
+export function dateStyle(text) {
+  if (/(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)/.test(text)) return 'ISO';
+  const d = text.match(/(?<!\d)\d{1,2}([/.-])\d{1,2}\1\d{2,4}(?!\d)/);
+  if (d) return 'numeric ' + d[1];
+  if (US_DATE.test(text)) return 'month name, month first';
+  const MON = EN_MONTHS.join('|');
+  if (new RegExp(`(?<!\\d)\\d{1,2}\\.?\\s*(?:${MON}|\\p{L}{3,9})\\.?\\s+\\d{4}(?!\\d)`, 'u').test(text)) return 'month name, day first';
+  return '';
 }

@@ -15,3 +15,8 @@ Other scripts in this folder (same setup): `picker.py` – searchable language l
 `v206.py` – grouped strings and their locations, context lines, Ignore that learns (and Undo), spelling hints, the layout check from real
 rendered boxes, and the stretch test (the page's HTML must be byte-identical afterwards).
 `localpdf.py` – a PDF opened from disk (`file://`): local-file access is asked for in the click, the file is checked, and no "Not allowed to load local resource" error is logged.
+`connectors.py` – the reported German "Connectors" page (`site/de-connectors.html`): status badges, tab labels, REST API, date and time
+formats, and the CSV export (one line per row, no blank fields, every location).
+`projects.py` – the reported German "Projekte" list (`site/de-projects.html`): no project name is dropped, the coverage line, orange wavy
+underlines (pixel-checked), the hover card and its decision buttons, and the popup following a decision made on the page.
+`contrast.py` – every visible text in the popup (results, both tabs, settings) meets WCAG AA contrast in the light and the dark theme.

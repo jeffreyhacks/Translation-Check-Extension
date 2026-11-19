@@ -42,6 +42,11 @@ async function classify({ lang, texts = [], ctxTexts = [], htmlLang, related, ct
       if (v.v === 'unsure' && lang !== 'en' && allEnglish(texts[k])) v = { ...v, enVocab: true };
       // every word also a word of the target language (by its word list: "Status", "Export" on a German page): genuinely shared vocabulary
       if (v.v === 'unsure' && lang !== 'en' && sharedEntirely(texts[k], lang)) v = { ...v, shared: true };
+      // how many of its words are English dictionary words: lets the page tell an English interface label ("Document Repo") from a coined name
+      if ((v.v === 'bad' || v.v === 'unsure') && lang !== 'en' && latinOnly(texts[k])) {
+        const ws = texts[k].match(/\p{L}+/gu) || [];
+        if (ws.length <= 6) v = { ...v, enWords: ws.filter((w) => w.length >= 3 && allEnglish(w)).length };
+      }
       verdicts[k] = v.v === 'bad' && isLabel(texts[k]) ? { ...v, label: true } : v; // a warning on plain interface words is not a name, whatever its capitals say
     }
   }));

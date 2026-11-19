@@ -38,6 +38,12 @@ const isCap = (c) => c.length >= 2 && /^\p{Lu}\p{Ll}/u.test(c);
 const SENTENCE_END = /[.!?:;。！？]$/;
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Technical terms that stay in English in every language's interface: allowed, so they are set aside like codes instead of ending up as
+// "can't tell" ("REST API" in a "Typ" column). Matched as whole words, capitals ignored. Users add their own with Ignore.
+export const TECH_TERMS = ['REST API', 'REST-API', 'RESTful', 'API', 'APIs', 'API key', 'URL', 'URLs', 'URI', 'HTTP', 'HTTPS', 'JSON', 'XML', 'YAML', 'CSV',
+  'SDK', 'SSO', 'SAML', 'OAuth', 'OAuth 2.0', 'OAuth2', 'OpenID Connect', 'JWT', 'Webhook', 'Webhooks', 'GraphQL', 'gRPC', 'WebSocket', 'WebSockets', 'SOAP',
+  'SQL', 'NoSQL', 'SMTP', 'IMAP', 'SFTP', 'FTP', 'SSH', 'DNS', 'CDN', 'VPN', 'LDAP', 'SCIM', 'UUID', 'CLI', 'S3', 'MFA', '2FA', 'TOTP'];
+
 /** Compile user/site terms ("never flag") into one regex. */
 export function compileTerms(terms) {
   const list = [...new Set((terms || []).map((t) => String(t).trim()).filter((t) => t.length >= 2))].sort((a, b) => b.length - a.length);

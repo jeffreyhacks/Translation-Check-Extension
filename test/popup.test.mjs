@@ -1,5 +1,6 @@
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
+import { loadNew } from './harness.mjs';
 let pass = 0, fail = 0;
 const t = (name, cond, extra = '') => { if (cond) pass++; else fail++; console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : '  ' + extra}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -25,10 +26,10 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
   const w = dom.window;
   const store = { ...(o.store || {}) }, sent = [], reg = [], downloads = [], updates = [], clip = [], perms = [], removed = [], runtimeSent = [];
   let permAnswer = true, contains = o.contains !== false;
-  let msgL, fetchOk = true;
+  let msgL, fetchOk = true, storageL = null;
   w.chrome = {
     i18n: { getUILanguage: () => 'en-US' },
-    storage: { local: { get: async () => store, set: async (o) => Object.assign(store, o) } },
+    storage: { local: { get: async () => store, set: async (o) => Object.assign(store, o) }, onChanged: { addListener: (f) => (storageL = f) } },
     tabs: { query: async () => [{ id: 5, url: tabUrl }], update: async (id, o) => updates.push([id, o]),
       sendMessage: async (id, m) => { sent.push(m); const R = o.result || RESULT; return m.type === 'scan' ? R : m.type === 'status' ? { result: null } : m.type === 'export' ? (o.export || { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: R.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) }) : { ok: true }; },
       onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
@@ -66,7 +67,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
   const scanBtn = w.document.querySelector('#scan');
   let permAtClick = -1;
   if (scanBtn) { const orig = scanBtn.click.bind(scanBtn); scanBtn.click = () => { orig(); permAtClick = perms.length; }; } // perms requested synchronously in the click
-  return { get permAtClick() { return permAtClick; }, get fetchesBeforeGrant() { return fetchesBeforeGrant; }, fetches: () => fetchN, w, d: w.document, store, sent, reg, downloads, updates, clip, perms, removed, pdfCalls, runtimeSent, denyPerms: () => (permAnswer = false), failFetch: () => (fetchOk = false), msg: (m, s) => msgL(m, s), $: (s) => w.document.querySelector(s) };
+  return { get permAtClick() { return permAtClick; }, get fetchesBeforeGrant() { return fetchesBeforeGrant; }, fetches: () => fetchN, w, d: w.document, store, sent, reg, downloads, updates, clip, perms, removed, pdfCalls, runtimeSent, denyPerms: () => (permAnswer = false), failFetch: () => (fetchOk = false), msg: (m, s) => msgL(m, s), storageChanged: (ch) => storageL && storageL(ch, 'local'), $: (s) => w.document.querySelector(s) };
 }
 const readBlob = (w, blob, as = 'text') => new Promise((res) => { const r = new w.FileReader(); r.onload = () => res(r.result); if (as === 'text') r.readAsText(blob); else r.readAsArrayBuffer(blob); });
 const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.textContent).join(' | ');
@@ -94,7 +95,7 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('popup: settings drawer is collapsed by default, language field is labelled', p.$('#settings').hidden && p.$('#result').hidden && /Page should be in/.test(p.$('.cap').textContent) && p.$('h1').textContent === 'Translation Check');
   p.$('#settingsBtn').click();
   t('popup: gear opens the settings drawer', !p.$('#settings').hidden && p.$('#settingsBtn').getAttribute('aria-expanded') === 'true');
-  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 4 && p.d.querySelectorAll('#settings .opt .d').length === 10 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
+  t('popup: drawer is grouped and every option has a description', p.d.querySelectorAll('#settings .grp h2').length === 4 && p.d.querySelectorAll('#settings .opt .d').length === 11 && /Assumes very short unclear text/.test(p.$('#modeHint').textContent));
   t('popup: drawer has strictness segments and the new model switches', p.d.querySelectorAll('input[name=mode]').length === 3 && p.$('#verify').checked && !p.$('#confirmed').checked);
   t('popup: side-panel button shown in popup', p.$('#openPanel').hidden === false);
   t('popup: button says "Check page" on web pages', p.$('#scanLabel').textContent === 'Check page');
@@ -355,6 +356,93 @@ const G = {
   p.$('#scan').click(); await sleep(60);
   p.$('#list .ignore-btn').click(); await sleep(80);
   t('206 learn: without learn.js, Ignore still saves the term and re-checks', JSON.stringify(p.store.ignore.sites['shop.example.com']) === '["Add to cart"]' && p.sent.filter((m) => m.type === 'scan').length === 2);
+}
+
+// ---------- reported: CSV of the German "Connectors" page (real scan and export data) ----------
+{
+  const page = loadNew(fs.readFileSync('test/e2e/site/de-connectors.html', 'utf8'), { url: 'https://knowledge-harvestor.artisanscloud.com/admin/connectors' });
+  const res = await page.call({ type: 'scan', lang: 'de', attrs: true, unsure: true, mode: 'balanced', source: false, live: false, marked: ['Übersicht'] });
+  const ex = await page.call({ type: 'export' });
+  const p = await boot('popup.html', ex.url, { result: res, export: ex });
+  p.$('#scan').click(); await sleep(60);
+  p.$('#expCsv').click(); await sleep(50);
+  const csv = (await readBlob(p.w, p.downloads.find((d) => d.size))).replace(/^﻿/, '');
+  const lines = csv.split('\r\n');
+  const parse = (line) => [...line.matchAll(/"((?:[^"]|"")*)"/g)].map((m) => m[1].replace(/""/g, '"'));
+  const head = parse(lines[0]), rows = lines.slice(1).map(parse);
+  const col = (r, name) => r[head.indexOf(name)];
+  const row = (text) => rows.find((r) => col(r, 'text') === text);
+  t('csv connectors: no line breaks inside fields (one line per row)', !/\n/.test(csv.replace(/\r\n/g, '')) && lines.length === ex.issues.length + 1, JSON.stringify(csv.slice(0, 300)));
+  t('csv connectors: no blank "detected language" (unknown / n/a instead)', rows.every((r) => col(r, 'detected language')), JSON.stringify(rows.map((r) => [col(r, 'text'), col(r, 'detected language')])));
+  t('csv connectors: no blank surrounding text', rows.every((r) => col(r, 'surrounding text')), JSON.stringify(rows.map((r) => [col(r, 'text'), col(r, 'surrounding text')])));
+  t('csv connectors: "Connectors" lists both locations in context and all locations, separated by " | "', col(row('Connectors'), 'occurrences') === '2' && col(row('Connectors'), 'context').split(' | ').length === 2 && col(row('Connectors'), 'all locations').split(' | ').length === 2, JSON.stringify(row('Connectors')));
+  t('csv connectors: "where" names the element (tab, badge, paragraph), not just "text"', col(row('Connectors'), 'where') === 'tab' && col(row('Valid'), 'where') === 'badge' && rows.every((r) => col(r, 'where') !== 'text'), JSON.stringify(rows.map((r) => col(r, 'where'))));
+  t('csv connectors: selectors start at #root', rows.every((r) => col(r, 'selector').startsWith('#root')));
+  const m = row('Übersicht');
+  t('csv connectors: a marked row keeps the models\' reason next to yours', m && /^Marked untranslated by you; models: \S/.test(col(m, 'reason')), m && col(m, 'reason'));
+}
+
+// ---------- reported: German "Projekte" list — coverage, legend, ignored rows in the CSV, orange marks on by default ----------
+{
+  const page = loadNew(fs.readFileSync('test/e2e/site/de-projects.html', 'utf8'), { url: 'https://knowledge-harvestor.artisanscloud.com/admin/projects' });
+  const res = await page.call({ type: 'scan', lang: 'de', attrs: true, unsure: true, mode: 'balanced', source: false, live: false, ignore: ['Wisight'] });
+  const ex = await page.call({ type: 'export' });
+  const p = await boot('popup.html', ex.url, { result: res, export: ex, store: { opts: { lang: 'de', unsure: false } } });
+  t('projects popup: "Mark unclear text" is switched on once for existing settings', p.$('#unsure').checked && p.store.opts.unclearMarks === 2 && p.store.opts.unsure === true, JSON.stringify(p.store.opts));
+  p.$('#scan').click(); await sleep(60);
+  const cov = p.$('#coverage');
+  const s = res.stats;
+  t('projects popup: coverage line adds up', !cov.hidden && cov.textContent.startsWith(`${s.scannedN} scanned`) && cov.textContent.includes(`${s.unsureN} unclear`) && cov.textContent.includes(`${s.nameN + s.skipN} ignored`), cov.textContent);
+  t('projects popup: legend explains the underlines', /Not translated/.test(p.$('#legend').textContent) && /Unclear/.test(p.$('#legend').textContent) && p.$('#legend .lg.unsure'));
+  p.$('#expCsv').click(); await sleep(50);
+  const csv = (await readBlob(p.w, p.downloads.find((d) => d.size))).replace(/^﻿/, '');
+  const rows = csv.split('\r\n').slice(1);
+  t('projects csv: unclear rows are in the export with a reason', rows.some((r) => r.startsWith('"Can’t tell","Smart Service Analytics","Name or title')), rows.filter((r) => /Smart/.test(r)).join('\n'));
+  t('projects csv: ignored rows are in the export with a reason', rows.some((r) => r.startsWith('"Ignored","Wisight","Ignored by you (the models read it as unclear')) && rows.some((r) => /^"Ignored","\d\d\.\d\d\.2026","Date or time/.test(r)), rows.filter((r) => r.startsWith('"Ignored"')).slice(0, 3).join('\n'));
+  // a decision made on the page (hover card) reaches this window through storage
+  p.storageChanged({ marked: { newValue: { global: [], sites: { 'knowledge-harvestor.artisanscloud.com': ['Smart Service Analytics'] } } } });
+  p.$('#settingsBtn').click();
+  t('projects popup: a decision made on the page shows up in the marked list here', p.$('#markedSite').value === 'Smart Service Analytics', p.$('#markedSite').value);
+}
+
+// ---------- 2.0.7: readable counts, plain legend, card setting, tab counts = rows ----------
+{
+  const css = fs.readFileSync('popup.css', 'utf8');
+  const rules = (sel) => css.split('}').filter((r) => r.trim().startsWith(sel)).join('}');
+  t('207 css: coverage and legend use theme colours only (readable in light and dark)', !/#[0-9a-f]{3,6}/i.test(rules('.coverage') + rules('.legend')) && /\.coverage b\{color:var\(--ink\)/.test(css), rules('.coverage'));
+  t('207 css: no wavy underline or highlight in the popup legend', !/wavy|var\(--mark\)/.test(rules('.legend')));
+  const G = { ...RESULT, stats: { ...RESULT.stats, badN: 5, scannedN: 40, skipN: 3 }, issues: [...RESULT.issues, { id: 9, verdict: 'bad', kind: 'text', text: 'Save', count: 3, occ: [{ id: 9 }, { id: 10 }, { id: 11 }], reason: 'Looks like English text', len: 4 }] };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: G });
+  t('207 setting: "Card on underlined text" is on by default', p.$('#hoverCard').checked);
+  p.$('#scan').click(); await sleep(60);
+  t('207 scan: the setting is sent with the check', p.sent.find((m) => m.type === 'scan').hoverCard === true);
+  t('207 tabs: the Untranslated count is the number of rows, the same as the navigator', p.$('#tabBad .n').textContent === '3' && p.$('#pos').textContent === '0 / 3' && /5 places/.test(p.$('#tabBad').title), `${p.$('#tabBad .n').textContent} | ${p.$('#pos').textContent} | ${p.$('#tabBad').title}`);
+  t('207 legend: a dot and a plain label for each colour', p.d.querySelectorAll('#legend .lg i').length === 2 && /Not translated/.test(p.$('#legend .lg.bad').textContent) && /Unclear/.test(p.$('#legend .lg.unsure').textContent));
+  t('207 coverage: bold numbers with a colour dot per category', p.d.querySelectorAll('#coverage b').length >= 5 && p.d.querySelectorAll('#coverage i').length >= 4 && /^40 scanned/.test(p.$('#coverage').textContent), p.$('#coverage').textContent);
+  p.$('#hoverCard').checked = false; p.$('#hoverCard').dispatchEvent(new p.w.Event('change')); await sleep(30);
+  t('207 setting: switching it off is saved and sent to the page right away', p.store.opts.hoverCard === false && p.sent.some((m) => m.type === 'tc-hovercard' && m.on === false), JSON.stringify(p.sent.slice(-2)));
+  t('207 setting: with the card off, the legend points to the row buttons', /buttons on each row/.test(p.$('#legendTip').textContent));
+  const p2 = await boot('popup.html', 'https://shop.example.com/x', { store: { opts: { hoverCard: false, unclearMarks: 2 } } });
+  t('207 setting: the choice is remembered', p2.$('#hoverCard').checked === false);
+}
+
+// ---------- 2.0.7: Ignored tab, Restore ----------
+{
+  const R = { ...RESULT, ignored: [
+    { id: 30, verdict: 'skip', kind: 'text', text: 'Customer Support Hub', reason: 'Ignored by you (the models read it as not translated: Looks like English text)', byUser: true, was: 'bad', count: 1, occ: [{ id: 30 }] },
+    { id: 31, verdict: 'skip', kind: 'text', text: 'AB-1001', reason: 'Code, number or ID (letters mixed with digits)', count: 1, occ: [{ id: 31 }] }] };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: R, store: { ignore: { global: [], sites: { 'shop.example.com': ['Customer Support Hub'] } } } });
+  p.$('#scan').click(); await sleep(60);
+  t('207 ignored: the Ignored tab is shown with one row per ignored text', !p.$('#tabSkip').hidden && p.$('#tabSkip .n').textContent === '2');
+  p.$('#tabSkip').click(); await sleep(20);
+  const rows = p.d.querySelectorAll('#list li.skip');
+  t('207 ignored: rows show the reason', rows.length === 2 && /Ignored by you/.test(rows[0].textContent) && /Code, number or ID/.test(rows[1].textContent));
+  t('207 ignored: only what you ignored has Restore', !!rows[0].querySelector('.restore-btn') && !rows[1].querySelector('.restore-btn') && /back to Untranslated/.test(rows[0].querySelector('.restore-btn').title));
+  const scans = p.sent.filter((m) => m.type === 'scan').length;
+  rows[0].querySelector('.restore-btn').click(); await sleep(80);
+  t('207 restore: off the ignore list, and the page is checked again', !(p.store.ignore.sites['shop.example.com'] || []).length && p.sent.filter((m) => m.type === 'scan').length === scans + 1 && !p.sent.filter((m) => m.type === 'scan').pop().ignore.includes('Customer Support Hub'));
+  p.$('#tabSkip').click(); p.$('#list li.skip button').click(); await sleep(20);
+  t('207 ignored: clicking a row jumps to it on the page', p.sent.some((m) => m.type === 'focus' && m.id === 30));
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

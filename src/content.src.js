@@ -1,9 +1,10 @@
 // Translation Check — page-side scanner (injected on demand via activeTab, or automatically on opted-in sites).
 // Language judgement happens in the background worker (one shared model); this script only collects,
 // masks, highlights and reports.
-import { mask, compileTerms } from './mask.js';
-import { detectBug, formatHints } from './rules.js';
-import { describe, contextLine, slotOf } from './context.js';
+import { mask, compileTerms, TECH_TERMS } from './mask.js';
+import { detectBug, formatHints, dateStyle } from './rules.js';
+import { describe, contextLine, slotOf, kindOf } from './context.js';
+import { isStatusValue, isStatusSlot } from './status.js';
 import { matcher } from './learn.js';
 import { nonLatinTarget, latinOnly } from './scripts.js';
 
@@ -105,7 +106,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
   }
   const TIP_ATTRS = ['data-tooltip', 'data-tip', 'data-tippy-content', 'data-bs-original-title', 'data-original-title'];
-  const collectable = (t, p) => t.length >= 2 && !URLISH.test(t) && (/\p{L}/u.test(t) || /[{%]/.test(t) || (p.hints && /\d/.test(t)));
+  const collectable = (t, p) => t.length >= 2 && !URLISH.test(t) && (/\p{L}/u.test(t) || /[{%]/.test(t) || (p.hints ? /\d/ : /\d[/.:-]\d/).test(t)); // (dates and times are always checked)
   const blocked = (el) => !!(el.closest && (el.closest(NO_TRANSLATE) || el.closest(SKIP_SEL)));
 
   async function collectFrom(root, p, out, scope, depth = 0) {
@@ -170,13 +171,19 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     let ign = 0;
     for (const it of raw) {
       // learned from earlier Ignore clicks (codes, versions, a page slot such as `span.user-name`): skipped like ignored terms
-      if (state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host)) { state.learnedN++; continue; }
+      // (kept as an Ignored item with its reason, so it is counted and exported instead of silently dropped)
+      if (!state.okSet.has(nk(it.text)) && state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host)) { state.learnedN++; it.base = { v: 'skip', reason: 'Ignored by a rule learned from your Ignore clicks' }; it.j = ''; it.len = 0; keep.push(it); continue; }
       if (p.bugs) {
         const b = detectBug(it.text);
         if (b) { it.base = { v: 'bug', reason: b }; it.j = ''; it.len = it.text.length; keep.push(it); continue; }
       }
-      if (p.hints) { const f = formatHints(it.text, p.lang); if (f.length) it.fmt = f; }
-      let m = mask(it.text, p.lang, termRe);
+      // dates and times are checked on every scan; number and price formats only with Format hints on
+      { const f = formatHints(it.text, p.lang, { numbers: p.hints, dates: true }); if (f.length) it.fmt = f; }
+      // Text you OK'd (Ignore in the popup, OK on the page) as a whole is still judged, so it can be listed as "OK'd by you" with what the models
+      // read, and so English you accepted still counts against the score: OK never turns untranslated text into translated text.
+      // (Ignored terms inside longer text are still masked there, as before.)
+      if (state.okSet.has(nk(it.text))) it.accepted = true;
+      let m = mask(it.text, p.lang, it.accepted ? state.baseRe : termRe);
       // On a page in another script, a one-word BrandCase title ("HomeIoT", "TrueCost") is judged as it is instead of being skipped as a brand:
       // built-in brands (WhatsApp, YouTube…) are still recognised as names, anything else is listed for a decision.
       if (p.lang !== 'en' && latinOnly(it.text) && !(termRe && termRe.test(it.text))) {
@@ -185,14 +192,25 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
         else if (!nonLatinTarget(p.lang) && m.removed && words(it.text) >= 2 && words(it.text) <= 4 && words(m.text) === 1 && !/\d/.test(it.text)) { it.jPart = m.text; m = { text: it.text, nameLike: true }; it.title = true; }
       }
       if (!/\p{L}{2}/u.test(m.text)) {
-        if (/\p{L}/u.test(it.text)) ign++;
-        if (it.fmt) { it.base = { v: 'ok' }; it.j = ''; it.len = 0; keep.push(it); }
+        if (it.fmt || dateStyle(it.text)) { it.base = { v: 'skip', reason: 'Date or time (its format is checked under Format)' }; it.j = ''; it.len = 0; it.dateOnly = true; keep.push(it); continue; }
+        // nothing left to judge (a code, an ID, a technical term, an ignored term): an Ignored item with the reason, never a silent drop
+        if (/\p{L}/u.test(it.text)) { ign++; it.base = { v: 'skip', reason: skipReason(it.text, p, it.accepted) }; it.j = ''; it.len = 0; keep.push(it); }
         continue;
       }
       it.j = m.text; it.nameLike = m.nameLike; it.len = m.text.length;
       keep.push(it);
     }
     return { keep, ign };
+  }
+
+  // Why text was set aside before judging (the masks only remove; this names what removed it).
+  function skipReason(text, p, accepted) {
+    const hit = (re) => { if (!re) return false; re.lastIndex = 0; return re.test(text); };
+    if (!accepted && hit(state.userRe)) return 'On your ignore list';
+    if (hit(state.techRe)) return 'Technical term (allowed in every language)';
+    if (hit(state.siteRe)) return 'Name of this site or app';
+    if (/\p{L}/u.test(text) && /\d/.test(text)) return 'Code, number or ID (letters mixed with digits)';
+    return 'Code, abbreviation or symbol';
   }
 
   // The full run of inline text around a fragment (e.g. the whole sentence around a <b> or <a>).
@@ -316,9 +334,23 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     await classifyTexts([...todo.map((it) => it.j), ...todo.filter((it) => it.jPart).map((it) => it.jPart)]);
     // On a page written in another script (Hindi, Arabic, Russian…), Latin-letter text can never be in the page's language, whatever surrounds it.
     const otherScript = nonLatinTarget(state.p.lang);
+    const elOf = (it) => (it.kind === 'text' ? it.node.parentElement || it.node.parentNode?.host : it.el);
     for (const it of todo) { // pass 1
       let v = vcache.get(ck(it.j));
       it.wrongScript = otherScript && latinOnly(it.j);
+      const latinTarget = !otherScript && state.p.lang !== 'en' && latinOnly(it.j);
+      // A status value in a badge or table cell ("Valid", "Completed", "In progress") is data from the app; spelled in English on a page in another
+      // language it is untranslated, even when the models can't place one short word or the word list knows it as a loanword (see status.js).
+      if (latinTarget && v.v !== 'bad' && v.v !== 'bug' && it.kind === 'text' && isStatusValue(it.text, state.p.lang) && isStatusSlot(elOf(it))) {
+        v = { ...v, v: 'bad', detected: 'en', reason: 'English status value', confirmed: otherVotes(v) >= 2 || !!v.enVocab, status: true };
+      }
+      // An English label on a tab, button, menu item, option or column header ("Knowledge Intelligence", "Document Repo") is interface text, not a
+      // product name, even when it is written in Title Case: two models read it as English and at least one of its words is an English dictionary word.
+      const ctl = latinTarget && !v.status && CONTROL.has(kindOf(elOf(it), it.kind === 'attr' ? it.attr : undefined));
+      if (ctl && (v.v === 'bad' || v.v === 'unsure') && words(it.j) >= 2 && words(it.j) <= 5 && otherVotes(v) >= 2 && (v.enWords || 0) >= 1 &&
+          (v.detected || v.other || v.was?.detected || v.lean) === 'en') {
+        v = { ...v, v: 'bad', detected: 'en', reason: 'English interface label (two language models read it as English)', confirmed: true, label: true, control: true };
+      }
       // Short capitalised phrases are often product/person names: weak evidence isn't enough to flag them
       // (unless every word is plain interface vocabulary, like "Order History": that is a label, not a name).
       if (it.nameLike && v.v === 'bad' && !v.label && v.reason !== 'Looks like English text') {
@@ -348,6 +380,11 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       // as held titles (see below), i.e. it is one more title in a column or a set of cards of titles
       it.titleWord = latinPage && !it.hold && v.v === 'unsure' && n === 1 && /^\p{Lu}/u.test(it.j) && !v.enVocab && !v.shared && ov >= 1 && leanEn;
       if (it.hold && v.v === 'unsure' && (!v.reason || it.title)) v = { ...v, reason: ov >= 2 && leanEn ? 'Name or title? Two language models read it as English' : 'Name or title? Could be untranslated' };
+      // every unclear text says why: no model could place it, a phrase written like a title, or models that disagree
+      if (v.v === 'unsure' && !v.reason) {
+        const vs = v.votes, none = !vs || ['tinyld', 'cld3', 'franc'].every((k) => vs[k] !== 'other' && vs[k] !== 'target');
+        v = { ...v, reason: none ? 'Detection failed: no language model could place it' : latinPage && n >= 2 && titleCase(it.j) ? 'Name or title? Could be untranslated' : 'The language models disagree' };
+      }
       it.base = v;
     }
     // pass 1b: titles in the same slot (same element and class: a table column of project names, a set of cards) are judged together
@@ -365,6 +402,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
         if (sl && titleSlots.has(sl)) { it.hold = true; it.base = { ...it.base, reason: 'Name or title? Two language models read it as English, like the other titles here' }; }
       }
     }
+    peers();
     // pass 2: fragments we couldn't judge inherit the verdict of the sentence they sit in
     const ctxFor = new Map();
     for (const it of todo) {
@@ -381,6 +419,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const secFor = new Map();
     for (const it of todo) {
       if (it.base.v !== 'unsure' || it.base.enVocab || it.base.via || it.hold) continue;
+      if (words(it.j) > 2) continue; // only a lone word or short label is read with its section; a longer phrase has its own evidence
       const v = it.base.votes, other = v ? ['cld3', 'franc', 'tinyld'].filter((k) => v[k] === 'other').length : 0;
       if (other >= 2) continue;
       const raw = it.kind === 'attr' ? sectionFor(it.el, null) : sectionFor(it.node.parentElement, it.node);
@@ -406,6 +445,54 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
   }
 
+  const titleCase = (t) => { const ws = t.match(/\p{L}[\p{L}'’-]*/gu) || []; return ws.length > 0 && ws.filter((w) => /^\p{Lu}/u.test(w)).length >= Math.ceil(ws.length * 0.6); };
+
+  // Items of the same kind in the same list are judged consistently: a table column, or a repeated slot (same element and class). When most of
+  // the column is names or titles that are flagged or held for a decision, the others there that are still unclear are held too (never assumed
+  // translated or cleared by their section), and a code-like name that masking emptied ("Testproj123") is listed as unclear instead of skipped.
+  // Text the models read as the target language keeps its verdict. Nothing here is site-specific: it only uses the page's own structure.
+  let tableIds = new WeakMap(), tableN = 0;
+  function peerKey(el) {
+    for (let e = el, k = 0; e && e.nodeType === 1 && k < 4; e = e.parentElement, k++) {
+      if (e.tagName === 'TD' || /^(cell|gridcell)$/.test(e.getAttribute('role') || '')) {
+        const table = e.closest('table,[role=table],[role=grid]'), row = e.parentElement;
+        if (!table || !row || row.closest('thead')) return '';
+        if (!tableIds.has(table)) tableIds.set(table, ++tableN);
+        return `col:${tableIds.get(table)}:${[...row.children].indexOf(e)}`;
+      }
+    }
+    const sl = slotOf(el);
+    return sl ? 'slot:' + sl : '';
+  }
+  function peers() {
+    if (nonLatinTarget(state.p.lang) || state.p.lang === 'en') return;
+    const groups = new Map();
+    for (const it of state.items) {
+      if (it.kind !== 'text' || !it.base || !nodeOf(it).isConnected || !latinOnly(it.text)) continue;
+      const k = peerKey(it.node.parentElement || it.node.parentNode?.host);
+      if (!k) continue;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(it);
+    }
+    for (const list of groups.values()) {
+      if (list.length < 3) continue;
+      const titleish = list.filter((it) => (it.base.v === 'bad' && !it.base.status && !it.base.marked) || it.hold).length;
+      if (titleish < 2 || titleish < list.length * 0.4) continue;
+      for (const it of list) {
+        if (it.base.v === 'unsure' && !it.hold) {
+          it.hold = true;
+          it.base = { ...it.base, reason: /^Name or title/.test(it.base.reason || '') ? it.base.reason : 'Name or title? Like the other names in this column or list', peers: true };
+        } else if (it.base.v === 'skip' && /^Code/.test(it.base.reason) && (it.text.match(/\p{L}/gu) || []).length >= 3) {
+          it.hold = true; it.j = it.text; it.len = it.text.length;
+          it.base = { v: 'unsure', reason: 'Name or code? It sits with names in the same column or list', peers: true };
+        }
+      }
+    }
+  }
+
+  // Interface controls whose text is a label, never a name or title.
+  const CONTROL = new Set(['tab', 'button', 'menu item', 'option', 'table header']);
+
   // Page-level tendency: if the page is clearly translated, unclear short strings almost certainly are too.
   function finalize() {
     let okC = 0, badC = 0;
@@ -418,7 +505,10 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
     for (const it of state.items) {
       // (Latin letters on a page in another script are never assumed translated)
-      if (it.base.v === 'unsure' && assume && !it.hold) { it.v = { v: 'ok', assumed: true }; state.assumedN++; } else it.v = it.base;
+      // Balanced assumes only very short unclear text (one or two short words) is translated; a longer phrase that stays unclear is listed,
+      // never counted as translated without evidence ("Smart Service Analytics" used to disappear this way). Relaxed assumes everything.
+      const shortOne = words(it.j) <= 2 && (it.j.match(/\p{L}/gu) || []).length < 16;
+      if (it.base.v === 'unsure' && assume && !it.hold && (state.p.mode === 'relaxed' || shortOne)) { it.v = { v: 'ok', assumed: true }; state.assumedN++; } else it.v = it.base;
     }
     // Text the person marked as untranslated (from the Unclear list) is listed as untranslated on every check, whatever the models say.
     const marked = new Set(state.p.marked.map(nk));
@@ -426,8 +516,18 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       for (const it of state.items) {
         if (it.v.v === 'bad' || it.v.v === 'bug' || !marked.has(nk(it.text))) continue;
         if (it.v.assumed) state.assumedN--;
-        it.v = { ...it.v, v: 'bad', assumed: false, marked: true, reason: 'Marked untranslated by you' };
+        // the models' own reading is kept next to the person's mark, so the export still shows what they decided and why
+        const modelReason = it.v.assumed ? 'Unclear; assumed translated because the rest of the page is' : it.v.reason || (it.v.v === 'ok' ? 'Read as the target language' : it.v.v === 'name' ? 'Looks like a name' : 'Too short or ambiguous to judge');
+        it.v = { ...it.v, v: 'bad', assumed: false, marked: true, reason: 'Marked untranslated by you', modelReason, modelVerdict: it.v.assumed ? 'unsure' : it.v.v };
       }
+    }
+    // Text you OK'd: Ignored, with the models' reading kept. Untranslated text you accepted still counts against the score (see render).
+    for (const it of state.items) {
+      if (!it.accepted || it.v.v === 'bug' || it.v.v === 'ok') continue; // (text in the page's language stays translated)
+      if (it.v.assumed) state.assumedN--;
+      const was = it.v.assumed ? 'unsure' : it.v.v;
+      const what = { bad: 'not translated', unsure: 'unclear', ok: 'translated', name: 'a name', skip: 'a code or ID' }[was] || was;
+      it.v = { v: 'skip', reason: `Ignored by you (the models read it as ${what}${it.v.reason && !it.v.assumed && was !== 'skip' ? ': ' + it.v.reason : ''})`, accepted: true, was, votes: it.v.votes, detected: it.v.detected };
     }
   }
 
@@ -442,12 +542,12 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     s.setAttribute(A_STYLE, NS);
     s.textContent = `
       ::highlight(${K.bad}){background-color:#ffd600;color:#111;text-decoration:underline wavy #d7263d}
-      ::highlight(${K.unsure}){background-color:rgba(80,140,255,.28);text-decoration:underline dotted #3b6df0}
+      ::highlight(${K.unsure}){background-color:rgba(232,89,12,.02);text-decoration:underline wavy #e8590c 1px}
       ::highlight(${K.bug}){background-color:rgba(190,60,255,.45);color:#111;text-decoration:underline wavy #7a1fa2}
       ::highlight(${K.fmt}){text-decoration:underline dotted #0f9d8a}
       ::highlight(${K.focus}){background-color:#d7263d;color:#fff}
       [${A_FLAG}="${NS}:bad"]{outline:2px dashed #d7263d!important;outline-offset:2px!important}
-      [${A_FLAG}="${NS}:unsure"]{outline:2px dotted #3b6df0!important;outline-offset:2px!important}
+      [${A_FLAG}="${NS}:unsure"]{outline:2px dotted #e8590c!important;outline-offset:2px!important}
       [${A_FLAG}="${NS}:bug"]{outline:2px dashed #7a1fa2!important;outline-offset:2px!important}
       [${A_FLAG}="${NS}:fmt"]{outline:2px dotted #0f9d8a!important;outline-offset:2px!important}
       [${A_FOCUS}="${NS}"]{box-shadow:0 0 0 4px rgba(215,38,61,.5)!important}`;
@@ -499,10 +599,19 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const p = state.p;
     resetMarks();
     purgeForeign();
-    targets.clear();
-    const stats = { ok: 0, bad: 0, unsure: 0, bug: 0, fmt: 0, name: 0, okN: 0, badN: 0, unsureN: 0, bugN: 0, fmtN: 0, nameN: 0, assumedN: state.assumedN, ignoredN: state.ignoredN, learnedN: state.learnedN };
-    const issues = [];
+    targets.clear(); hoverOf = new WeakMap(); hideCard(true);
+    const stats = { ok: 0, bad: 0, unsure: 0, bug: 0, fmt: 0, name: 0, skip: 0, okN: 0, badN: 0, unsureN: 0, bugN: 0, fmtN: 0, nameN: 0, skipN: 0, assumedN: state.assumedN, ignoredN: state.ignoredN, learnedN: state.learnedN };
+    const issues = [], ignored = [];
     let id = 0;
+    // Ignored text (names, codes, technical terms, ignored terms) is never highlighted, but it is listed with its reason in the export, so every
+    // text item the check found ends up in exactly one category.
+    const addIgnored = (it, reason) => {
+      const myId = ++id;
+      targets.set(myId, it);
+      // byUser: on your ignore list (Ignore in the popup or on the page), so it can be restored; was: its tab before you ignored it
+      const byUser = !!it.v?.accepted || /^On your ignore list/.test(reason || '');
+      ignored.push({ id: myId, verdict: 'skip', kind: it.kind, attr: it.attr, reason, text: it.text.slice(0, 300), len: it.text.length, votes: it.v?.votes, byUser, was: it.v?.was, detected: it.v?.detected });
+    };
     const add = (it, verdict, reason, detected, extra) => {
       const myId = ++id;
       targets.set(myId, it);
@@ -518,14 +627,24 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
         if (!RANK[cur] || RANK[verdict] > RANK[cur]) n.setAttribute(A_FLAG, NS + ':' + verdict);
       }
       const hint = HINTS.has(verdict);
-      issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: hint ? undefined : it.v?.votes, confirmed: !hint && !!it.v?.confirmed, marked: !hint && !!it.v?.marked, reason: reason && it.v?.via === 'context' && !hint ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length, ...extra });
+      if ((verdict === 'bad' || verdict === 'unsure') && (verdict === 'bad' || p.unsure)) hoverOf.set(n, myId);
+      issues.push({ id: myId, verdict, kind: it.kind, attr: it.attr, detected, votes: hint ? undefined : it.v?.votes, confirmed: !hint && !!it.v?.confirmed, marked: !hint && !!it.v?.marked, modelReason: hint ? undefined : it.v?.modelReason, reason: reason && it.v?.via === 'context' && !hint ? reason + ' (judged from the surrounding sentence)' : reason, text: it.text.slice(0, 300), len: it.len || it.text.length, ...extra });
     };
+    // dates written in more than one way on the same page ("13/11/2026" and "13.11.2026", or "Nov 13, 2026" and "13 Nov 2026")
+    const styles = new Set(state.items.filter((it) => nodeOf(it).isConnected).map((it) => dateStyle(it.text)).filter(Boolean));
+    const numeric = [...styles].filter((x) => x.startsWith('numeric'));
+    const mixedDates = numeric.length > 1 || (styles.has('month name, month first') && styles.has('month name, day first'))
+      ? `Dates on this page are written in different formats (${[...styles].join('; ')})` : '';
     for (const it of state.items) {
       if (!nodeOf(it).isConnected) continue;
       const v = it.v;
       stats[v.v] += it.len; stats[v.v + 'N']++;
-      if (v.v !== 'ok' && v.v !== 'name') add(it, v.v, v.reason, v.detected); // names are counted, never highlighted
-      if (p.hints && it.fmt) for (const f of it.fmt) { stats.fmtN++; add(it, 'fmt', f); }
+      // the language the models leaned to, when no verdict names one ("Document Repo": two models said English, but it stayed unclear)
+      if (v.v === 'name') addIgnored(it, v.kind === 'id' ? 'User name or ID' : v.reason || 'Looks like a name'); // names are counted, never highlighted
+      else if (v.v === 'skip') addIgnored(it, v.reason);
+      else if (v.v !== 'ok') add(it, v.v, v.reason, v.detected || v.lean || v.was?.detected || v.other);
+      const fmt = [...(it.fmt || []), ...(mixedDates && dateStyle(it.text) ? [mixedDates] : [])];
+      for (const f of fmt) { stats.fmtN++; add(it, 'fmt', f); }
     }
     for (const win of marks.keys()) {
       const m = marks.get(win), reg = win.CSS.highlights;
@@ -535,13 +654,22 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const groups = group(issues);
     groups.sort((a, b) => order[a.verdict] - order[b.verdict] || b.len - a.len);
     state.allIssues = groups.slice(0, 5000);
+    state.allIgnored = group(ignored).slice(0, 5000);
+    issueById = new Map(issues.map((i) => [i.id, i]));
+    // "skipped" chip: codes, technical terms and ignored terms actually set aside in the end (not dates, not rules learned from Ignore)
+    stats.ignoredN = state.items.filter((it) => it.v.v === 'skip' && !it.dateOnly && !/learned/.test(it.v.reason || '') && nodeOf(it).isConnected).length;
+    stats.scannedN = stats.okN + stats.badN + stats.unsureN + stats.bugN + stats.nameN + stats.skipN; // every text item, in exactly one category
     for (const g of groups.slice(0, 300)) withContext(g, 12);
-    const judged = stats.ok + stats.bad;
+    // English you OK'd is still English on the page: it stays in the score (as not translated), it just isn't listed as a problem any more
+    const acceptedBad = state.items.reduce((n, it) => n + (it.v.accepted && it.v.was === 'bad' && nodeOf(it).isConnected ? it.len : 0), 0);
+    const judged = stats.ok + stats.bad + acceptedBad;
     last = {
       lang: p.lang, requested: p.requested, mode: p.mode, host: location.hostname, pageLang: document.documentElement.lang || '', stats, auto: state.auto,
       score: judged ? Math.round((stats.ok / judged) * 100) : null,
       issues: groups.slice(0, 300).map((i) => ({ ...i, text: i.text.slice(0, 160) })), truncated: Math.max(0, groups.length - 300),
-      source: state.sourceInfo, models: state.models, live: !!observers.length,
+      // the Ignored tab: what you ignored first (it can be restored), then names, codes, technical terms and dates, each with its reason
+      ignored: [...state.allIgnored].sort((a, b) => (b.byUser ? 1 : 0) - (a.byUser ? 1 : 0)).slice(0, 300).map((g) => ({ ...withContext(g, 12), text: g.text.slice(0, 160) })),
+      source: state.sourceInfo, models: state.models, live: p.live && !!observers.length,
     };
   }
 
@@ -593,7 +721,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
   }
 
   function clearAll() {
-    clearTimeout(timer); firstChange = 0; dirty.clear(); unfocus();
+    clearTimeout(timer); clearTimeout(lateTimer); firstChange = 0; dirty.clear(); unfocus(); hideCard(true);
     observers.forEach((o) => o.disconnect()); observers = []; observed = new WeakSet();
     resetMarks();
     purgeForeign();
@@ -647,7 +775,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
   function selectorOf(el) {
     const parts = [];
     let n = el;
-    while (n && n.nodeType === 1 && parts.length < 8) {
+    // the full path up to the nearest id (or the document root), so every copy can be found again (no depth limit that cut paths off mid-way)
+    while (n && n.nodeType === 1 && parts.length < 60) {
       if (n.id && /^[A-Za-z][\w-]*$/.test(n.id)) { parts.unshift('#' + n.id); break; }
       let s = n.tagName.toLowerCase();
       const par = n.parentElement;
@@ -663,7 +792,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     if (!state) return { issues: [] };
     return {
       url: location.href, title: document.title, lang: state.p.lang, generated: new Date().toISOString(), source: state.sourceInfo,
-      issues: state.allIssues.map((g) => {
+      issues: [...state.allIssues, ...(state.allIgnored || [])].map((g) => {
         withContext(g, Infinity);
         const sel = (id) => { const t = targets.get(id), n = t && nodeOf(t); return n ? selectorOf(t.kind === 'text' ? n.parentElement || n.parentNode?.host : n) : ''; };
         const occurrences = g.occ.map((o) => ({ selector: sel(o.id), where: o.where, before: o.before, after: o.after, kind: o.kind, attr: o.attr }));
@@ -686,10 +815,104 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     observers.push(mo);
   }
 
+  // ---------- Hover card on marked text: why it was marked, how the models voted, and a decision ----------
+  // Pointing at underlined text (orange: unclear, red: untranslated) shows a small card. "Not translated" marks an unclear text as untranslated,
+  // "OK" puts it on this site's ignore list, the same lists as the popup's buttons (the popup picks the change up from storage).
+  let hoverOf = new WeakMap(), issueById = new Map(), card = null, cardTimer = 0, moveQueued = false, lastMove = null;
+  function hideCard(now) {
+    clearTimeout(cardTimer);
+    const go = () => { if (card) { card.host.remove(); card = null; } };
+    if (now) go(); else cardTimer = setTimeout(go, 350);
+  }
+  function hoverTarget(x, y, target) {
+    const flagged = target && target.closest && target.closest(`[${A_FLAG}^="${NS}:"]`);
+    if (flagged && hoverOf.has(flagged)) return hoverOf.get(flagged);
+    const doc = document;
+    let n = null;
+    try {
+      if (doc.caretPositionFromPoint) { const cp = doc.caretPositionFromPoint(x, y); n = cp && cp.offsetNode; }
+      else if (doc.caretRangeFromPoint) { const r = doc.caretRangeFromPoint(x, y); n = r && r.startContainer; }
+    } catch (e) { /* no caret API */ }
+    if (!n || n.nodeType !== 3 || !hoverOf.has(n)) return null;
+    const r = doc.createRange(); r.selectNodeContents(n);
+    return [...r.getClientRects()].some((b) => x >= b.left - 1 && x <= b.right + 1 && y >= b.top - 1 && y <= b.bottom + 1) ? hoverOf.get(n) : null;
+  }
+  function onMove(e) {
+    lastMove = e;
+    if (moveQueued) return;
+    moveQueued = true;
+    requestAnimationFrame(() => {
+      moveQueued = false;
+      const ev = lastMove;
+      if (!state || !ev || !state.p.hoverCard) { if (card) hideCard(true); return; }
+      if (card && card.host.contains(ev.target)) { clearTimeout(cardTimer); return; } // on the card itself
+      const id = hoverTarget(ev.clientX, ev.clientY, ev.target);
+      if (id && (!card || card.id !== id)) showCard(id, ev.clientX, ev.clientY);
+      else if (id) clearTimeout(cardTimer);
+      else if (card) hideCard(false);
+    });
+  }
+  const agreeText = (i) => { const n = i.votes ? ['tinyld', 'cld3', 'franc'].filter((k) => i.votes[k] === 'other').length : null; return n == null ? '' : `${n}/3 models read another language${i.confirmed ? ' (confirmed)' : ''}`; };
+  function showCard(id, x, y) {
+    const i = issueById.get(id), t = targets.get(id);
+    if (!i || !t) return;
+    hideCard(true);
+    const host = document.createElement('div');
+    host.setAttribute(A_STYLE, NS); // never collected or treated as a page change
+    host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;left:0;top:0';
+    const root = host.attachShadow({ mode: 'open' });
+    const color = i.verdict === 'bad' ? '#d7263d' : '#e8590c';
+    root.innerHTML = `<style>
+      .c{font:12.5px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#14213d;background:#fff;border:1px solid #dde3ec;border-left:4px solid ${color};border-radius:8px;
+         box-shadow:0 6px 24px rgba(20,33,61,.18);padding:8px 10px;max-width:300px}
+      .h{font-weight:600;color:${color};margin-bottom:2px}.r{margin:2px 0}.m{color:#566176;font-size:11.5px}
+      .b{display:flex;gap:6px;margin-top:7px}button{font:inherit;font-size:12px;border:1px solid #c9d1de;background:#f6f8fb;color:#14213d;border-radius:6px;padding:3px 9px;cursor:pointer}
+      button:hover{background:#eaeef5}button.p{background:${color};border-color:${color};color:#fff}button.ok{margin-left:auto}</style>
+      <div class="c" role="dialog" aria-label="Translation Check"><div class="h"></div><div class="r"></div><div class="m"></div><div class="b"></div></div>`;
+    root.querySelector('.h').textContent = i.marked ? 'Not translated (marked by you)' : i.verdict === 'bad' ? 'Not translated' : 'Unclear';
+    root.querySelector('.r').textContent = i.reason || 'Too short or ambiguous to judge';
+    root.querySelector('.m').textContent = agreeText(i);
+    const btns = root.querySelector('.b');
+    const btn = (label, cls, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.className = cls; b.title = title; b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); hideCard(true); fn(); }); btns.append(b); };
+    const text = t.text;
+    // OK only closes the card: the text keeps its underline, its tab and its counts. Changing its status takes a button that says so.
+    if (i.marked) btn('Unmark', '', 'Undo your mark: back to what the language models said (Unclear)', () => decide('unmark', text));
+    else if (i.verdict === 'unsure') btn('Not translated', 'p', 'List it as untranslated on every check of this site', () => decide('mark', text));
+    btn('Ignore', '', 'Stop flagging it on this site: it moves to the Ignored tab (restore it there). Untranslated text still counts against the score', () => decide('ignore', text));
+    btn('OK', 'ok', 'Close this card. Nothing changes', () => {});
+    host.addEventListener('mouseleave', () => hideCard(false));
+    document.documentElement.appendChild(host);
+    const box = root.querySelector('.c').getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    host.style.left = Math.max(4, Math.min(x + 12, vw - box.width - 8)) + 'px';
+    host.style.top = (y + 18 + box.height > vh - 4 ? Math.max(4, y - box.height - 12) : y + 18) + 'px';
+    card = { host, id };
+  }
+  // The decision is saved in the same lists the popup uses (latest decision wins), then the page is checked again with them.
+  async function decide(kind, text) {
+    if (!state) return;
+    const host = location.hostname, k = nk(text);
+    let d = {};
+    try { d = await api.storage.local.get(['ignore', 'marked']); } catch (e) { /* storage unavailable: still apply to this check */ }
+    const ig = { global: [], sites: {}, ...(d.ignore || {}) }, mk = { global: [], sites: {}, ...(d.marked || {}) };
+    const drop = (o) => { o.global = (o.global || []).filter((x) => nk(x) !== k); for (const h of Object.keys(o.sites || {})) o.sites[h] = o.sites[h].filter((x) => nk(x) !== k); };
+    drop(mk); if (kind !== 'unmark') drop(ig);
+    const into = (o) => { const l = host ? (o.sites[host] = o.sites[host] || []) : o.global; l.push(text); };
+    if (kind === 'mark') into(mk);
+    if (kind === 'ignore') into(ig);
+    try { await api.storage.local.set({ ignore: ig, marked: mk }); } catch (e) { /* see above */ }
+    const lists = (o) => [...(o.global || []), ...((o.sites || {})[host] || [])];
+    const res = await scan({ ...state.params, ignore: lists(ig), marked: lists(mk) });
+    if (!res.error) announce(true);
+  }
+  document.addEventListener('mousemove', onMove, { passive: true });
+  document.addEventListener('scroll', () => { if (card) hideCard(true); }, { passive: true, capture: true });
+
   // ---------- Live updates: re-judge only what changed ----------
   // A check runs once the page has been quiet for QUIET ms, and never later than MAX_WAIT ms after the first change: pages with a ticking
   // clock or live counters ("Zuletzt aktualisiert …", "vor 3 Sekunden") change all the time, and a plain "wait until quiet" never ran there.
-  const QUIET = 250, MAX_WAIT = 800;
+  const QUIET = 250, MAX_WAIT = 800, LATE_MS = 5000;
+  let lateTimer = 0;
   function schedule() {
     const now = Date.now();
     if (!firstChange) firstChange = now;
@@ -785,10 +1008,12 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       verify: params.verify !== false, confirmedOnly: !!params.confirmedOnly,
       learned: Array.isArray(params.learned) ? params.learned : [],
       marked: Array.isArray(params.marked) ? params.marked.filter((x) => typeof x === 'string') : [],
+      hoverCard: params.hoverCard !== false, // the card on underlined text (Settings › On the page)
     };
     const learnedTerms = p.learned.filter((r) => r.type === 'term').map((r) => r.value);
     state = { p, params, items: [], scope: { roots: new Set() }, ctx: null, ignoredN: 0, assumedN: 0, learnedN: 0, allIssues: [], source: null, sourceInfo: { status: p.source ? 'none' : 'off' },
-      termRe: compileTerms([...p.ignore, ...learnedTerms, ...siteTerms()]), learnMatch: matcher(p.learned), auto: null };
+      termRe: compileTerms([...p.ignore, ...learnedTerms, ...siteTerms(), ...TECH_TERMS]), learnMatch: matcher(p.learned), auto: null,
+      userRe: compileTerms([...p.ignore, ...learnedTerms]), okSet: new Set(p.ignore.map(nk)), baseRe: compileTerms([...learnedTerms, ...siteTerms(), ...TECH_TERMS]), techRe: compileTerms(TECH_TERMS), siteRe: compileTerms(siteTerms()) };
     try {
       const raw = [];
       await collectFrom(document.body, p, raw, state.scope);
@@ -811,7 +1036,13 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       if (my !== seq || !state) return { error: 'A newer check replaced this one.' };
       finalize(); render();
       if (p.live) { for (const r of state.scope.roots) observe(r); if (params.lang === 'auto') watchLang(); }
-      last.live = !!observers.length;
+      else {
+        // Live updates off: text that arrives just after the check (table rows and status badges loaded from the server) is still picked up
+        // for a few seconds, then the page is left alone.
+        for (const r of state.scope.roots) observe(r);
+        lateTimer = setTimeout(() => { if (state && !state.p.live) { observers.forEach((o) => o.disconnect()); observers = []; observed = new WeakSet(); } }, LATE_MS);
+      }
+      last.live = p.live && !!observers.length;
       announce(false);
       return last;
     } catch (e) {
@@ -826,6 +1057,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       case 'focus': reply({ ok: focusIssue(msg.id) }); break;
       case 'status': reply({ result: last }); break;
       case 'export': reply(exportData()); break;
+      case 'tc-hovercard': if (state) { state.p.hoverCard = !!msg.on; state.params = { ...state.params, hoverCard: !!msg.on }; if (!msg.on) hideCard(true); } reply({ ok: true }); break;
       default: break;
     }
     return false;
