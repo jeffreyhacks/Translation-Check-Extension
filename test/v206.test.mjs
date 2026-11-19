@@ -106,7 +106,7 @@ const SHOP = page(`
 {
   const bg = loadBg();
   // as the page script does: text that masking empties (brand-style words such as "WhatsApp") is skipped, never judged
-  const judge = async (lang, raw) => { const m = mask(raw, lang, null).text; if (!/\p{L}{2}/u.test(m)) return { v: 'skipped' }; return (await bg({ type: 'tc-classify', lang, related: true, verify: true, ctxTexts: [], texts: [m] })).verdicts[0]; };
+  const judge = async (lang, raw) => { const m = mask(raw, lang, null).text; if (!/\p{L}\p{M}*\p{L}/u.test(m)) return { v: 'skipped' }; return (await bg({ type: 'tc-classify', lang, related: true, verify: true, ctxTexts: [], texts: [m] })).verdicts[0]; };
   for (const [lang, raw] of [['hi', 'technical • impatient'], ['hi', 'casual • calm'], ['ar', 'friendly • curious'], ['ru', 'Save changes'], ['ja', 'casual • calm'], ['zh', 'Export the report']]) {
     const v = await judge(lang, raw);
     t(`script+dictionary: "${raw}" on a ${lang} page is untranslated English and confirmed`, v.v === 'bad' && v.detected === 'en' && v.confirmed, JSON.stringify(v));

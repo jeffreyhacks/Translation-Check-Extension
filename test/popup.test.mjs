@@ -147,7 +147,7 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   const wrong = { ...RESULT, lang: 'en', requested: 'en', pageLang: 'de', score: 12, stats: { ...RESULT.stats, badN: 15, okN: 2 },
     issues: Array.from({ length: 15 }, (_, k) => ({ id: 100 + k, verdict: 'bad', kind: 'text', text: 'Beschwerde über fehlerhaftes Gerät ' + k, detected: 'de', reason: 'Detected as another language', len: 34 })) };
   p.msg({ type: 'tc-result', result: wrong }, { tab: { id: 5 } });
-  t('popup: short banner appears when the target is probably wrong', !p.$('#mismatch').hidden && /Mostly German/.test(p.$('#mismatchText').textContent) && /page’s own language/.test(p.$('#mismatchText').textContent), p.$('#mismatchText').textContent);
+  t('popup: short banner appears when the target is probably wrong', !p.$('#mismatch').hidden && /Mostly German \(\d+% of the text\)/.test(p.$('#mismatchText').textContent) && /page’s own language/.test(p.$('#mismatchText').textContent), p.$('#mismatchText').textContent);
   t('popup: banner offers one-click fix', p.$('#mismatchFix').textContent === 'Check for German');
   p.$('#mismatchFix').click(); await sleep(60);
   t('popup: fix switches the target and re-checks', p.$('#lang').value === 'de' && p.$('#langInput').value === 'German (Deutsch)' && p.sent.filter((m) => m.type === 'scan').pop().lang === 'de' && p.store.opts.lang === 'de');
@@ -457,6 +457,20 @@ const G = {
   const q = await boot('popup.html', 'https://shop.example.com/x', { result: { ...RESULT, score: 100, stats: { ...RESULT.stats, badN: 0 } } });
   q.$('#scan').click(); await sleep(60);
   t('accepted chip: not shown when nothing was accepted', !q.$('#chips .chip.accepted'));
+}
+{
+  // reported: a Hindi page with English project names said "Mostly English — the page's own language. Wrong target?"
+  const issues = Array.from({ length: 8 }, (_, k) => ({ id: 200 + k, verdict: 'bad', kind: 'text', text: 'Riverside Cold-Chain Hub Migration ' + k, detected: 'en', reason: 'Looks like English text', len: 30 }));
+  const hiPage = { ...RESULT, lang: 'hi', requested: 'hi', pageLang: 'en', score: 48, stats: { ...RESULT.stats, ok: 300, bad: 240, okN: 29, badN: 16, unconfirmedN: 2 }, issues };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: hiPage });
+  p.$('#scan').click(); await sleep(60);
+  t('banner: not shown when most of the checked text is in the target, even if the warnings are mostly English', p.$('#mismatch').hidden, p.$('#mismatchText').textContent);
+  t('score: the tooltip says how it is worked out', /by length: translated ÷ \(translated \+ not translated\)/.test(p.$('#score').title), p.$('#score').title);
+  const c = p.$('#chips .chip.accepted');
+  t('unconfirmed chip: hidden warnings are counted, and the chip opens the Ignored tab', c && /2 unconfirmed hidden/.test(c.textContent), chipsText(p));
+  const q = await boot('popup.html', 'https://shop.example.com/x', { result: { ...hiPage, stats: { ...hiPage.stats, ok: 100 } } });
+  q.$('#scan').click(); await sleep(60);
+  t('banner: shown when the other language outweighs the target', !q.$('#mismatch').hidden && /Mostly English \(71% of the text\) — the page’s own language/.test(q.$('#mismatchText').textContent), q.$('#mismatchText').textContent);
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

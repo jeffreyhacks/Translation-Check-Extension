@@ -6,7 +6,7 @@ import { detectBug } from './rules.js';
 
 const MAX_PAGES = 300, MAX_BLOCKS = 6000;
 const clean = (s) => s.replace(/\s+/g, ' ').trim();
-const usable = (t) => /\p{L}{2}/u.test(t);
+const usable = (t) => /\p{L}\p{M}*\p{L}/u.test(t);
 
 /** Turn one page's positioned text items into paragraphs (lines grouped by spacing and font size). */
 export function pageBlocks(items) {

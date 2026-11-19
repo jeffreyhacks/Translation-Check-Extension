@@ -34,6 +34,9 @@ Click a row to scroll to it on the page; **‹ ›** step through the list. Each
 - **why it was flagged**: *Looks like English text*, *Name or title? Two language models read it as English*, *Identical to the source-language page*, and so on.
 
 Chips under the score summarise the check: the language checked, how many names and codes were skipped, and whether live updates are on.
+*N accepted untranslated* (untranslated text you accepted, which still counts against the score) and *N unconfirmed hidden* open the Ignored tab.
+The score is worked out by the amount of text, not the number of items (point at it for the formula), and the *Wrong target?* banner
+appears only when more of the checked text is in another language than in the target.
 
 ### Coverage: nothing is skipped silently
 Every text item the check finds ends up in exactly one category, and the line under the chips counts them:
@@ -104,7 +107,7 @@ learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
 | | **Balanced** (default) | Assumes very short unclear text (one or two short words) is translated when the rest of the page clearly is. Longer unclear text is always listed. |
 | | **Strict** | Lists everything unclear. |
 | Detection | **Double-check with CLD3 + franc** | Two more language models review every warning. |
-| | **Confirmed warnings only** | Shows only warnings that at least two models back. |
+| | **Confirmed warnings only** | Shows only warnings that at least two models back. The others are hidden from the lists, counted in an *N unconfirmed hidden* chip and listed under **Ignored** with their reason. |
 | | **Accept related languages** | Treats close relatives (Spanish/Portuguese, Danish/Norwegian) as the target. |
 | On the page | **Placeholders & tooltips** | Also checks alt text, placeholders, titles and accessible labels. |
 | | **Card on underlined text** | Shows a card with the reason and decision buttons when pointing at underlined text on the page (on by default). |
@@ -145,7 +148,12 @@ On a Hindi, Arabic, Russian, Japanese or Chinese page, Latin-script text stands 
 - up to three English dictionary words ("technical • impatient", "Inventory Management") are **untranslated**;
 - other Latin-script text, such as a project or session title ("Wisight Mapping", "HomeIoT"), is **unclear** (*Name or title?*) and is
   never counted as translated because of its surroundings;
-- built-in names and brands (WhatsApp, Google) and lowercase account IDs ("jeffadmin") count as names.
+- built-in names and brands (WhatsApp, Google) and lowercase account IDs ("jeffadmin") count as names;
+- a language menu's own code ("hi", "HI", "IN HI") on a button, link or menu item is ignored (*Language code*) when it is the target's or
+  the page's language. Title-case words ("Hi", "No") are still checked.
+
+Words are read with their vowel signs and joining marks (Devanagari ि, ू, ्; the same in Bengali, Tamil and other Indic scripts), so short
+words such as "सेटिंग्स" or "पूर्ण" are judged like any other text, never set aside as codes.
 
 ### Titles on Latin-script pages
 On a German, French, Danish… page, text that two models read as English and that is written like a title ("Skill Scout", "Wisight

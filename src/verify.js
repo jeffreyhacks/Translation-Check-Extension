@@ -15,7 +15,7 @@ import { implausible } from './alphabet.js';
 import { HARD } from './guard.js';
 
 const letters = (t) => (t.match(/\p{L}/gu) || []).length;
-const wordsOf = (t) => (t.match(/\p{L}[\p{L}'’-]*/gu) || []).length;
+const wordsOf = (t) => (t.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []).length;
 const solid = (t) => letters(t) >= 20 && wordsOf(t) >= 3; // long enough for a model's own confidence to mean something
 const ABSTAIN = { vote: 'abstain' };
 const hasAccent = (t) => /[\u00c0-\u024f]/.test(t); // letters English words (almost) never use: é ä ö ü ñ ç ø ł ş ...
@@ -169,7 +169,7 @@ export function createVerifier(cldFallback = async () => null) {
     const forTarget = all.filter((x) => x.vote === 'target'), against = all.filter((x) => x.vote === 'other');
     // a confident vote the other way stops "two models agree" from deciding
     const blocked = (side) => all.some((x) => x.strong && x.vote !== 'abstain' && x.vote !== side);
-    const words = text.toLowerCase().match(/\p{L}[\p{L}'’-]*/gu) || [];
+    const words = text.toLowerCase().match(/\p{L}[\p{L}\p{M}'’-]*/gu) || [];
     const en = englishHits(text, lang);
     const englishWording = lang !== 'en' && en.strong >= 1 && en.own === 0; // clearly English words and none of the target language's own
 

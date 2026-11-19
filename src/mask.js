@@ -48,7 +48,7 @@ export const TECH_TERMS = ['REST API', 'REST-API', 'RESTful', 'API', 'APIs', 'AP
 export function compileTerms(terms) {
   const list = [...new Set((terms || []).map((t) => String(t).trim()).filter((t) => t.length >= 2))].sort((a, b) => b.length - a.length);
   if (!list.length) return null;
-  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${list.map(esc).join('|')})(?![\\p{L}\\p{N}])`, 'giu');
+  return new RegExp(`(?<![\\p{L}\\p{M}\\p{N}])(?:${list.map(esc).join('|')})(?![\\p{L}\\p{M}\\p{N}])`, 'giu');
 }
 
 /** @returns {{text:string, nameLike:boolean, removed:boolean}} */
@@ -67,7 +67,7 @@ export function mask(input, lang, termRe) {
   }
   const kept = [];
   for (const raw of toks) {
-    const core = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+    const core = raw.replace(/^[^\p{L}\p{M}\p{N}]+|[^\p{L}\p{M}\p{N}]+$/gu, '');
     if (!core) continue;
     if (/\d/.test(core)) continue;                          // gpt-6-luna, 4K, mp3, v2, B2B
     if (isLangName(core)) continue;                         // Turkish, German, Deutsch, Türkçe

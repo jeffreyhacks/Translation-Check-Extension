@@ -19,7 +19,7 @@ const SAME = { all: ['online', 'offline'], fr: ['active', 'inactive'], es: ['err
 export function isStatusValue(text, lang) {
   const base = String(lang || '').toLowerCase().split(/[-_]/)[0];
   if (!base || base === 'en') return false;
-  const k = text.toLowerCase().replace(/[^\p{L} ]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  const k = text.toLowerCase().replace(/[^\p{L}\p{M} ]+/gu, ' ').replace(/\s+/g, ' ').trim();
   if (!k || !STATUS.has(k)) return false;
   return !SAME.all.includes(k) && !(SAME[base] || []).includes(k);
 }

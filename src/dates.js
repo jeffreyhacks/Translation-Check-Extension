@@ -46,7 +46,7 @@ export function dateRe(lang) {
       `${W}${M}\\s+${D}(?:,?\\s*${Y})?`,                      // Nov 10, 2026 · Tuesday, November 10
       `${M}\\s+${Y}`,                                        // Nov 2026
     ];
-    re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${forms.join('|')})(?![\\p{L}\\p{N}])`, 'giu');
+    re = new RegExp(`(?<![\\p{L}\\p{M}\\p{N}])(?:${forms.join('|')})(?![\\p{L}\\p{M}\\p{N}])`, 'giu');
   }
   reCache.set(key, re);
   return re;
@@ -62,7 +62,7 @@ export function englishMonths(text, lang) {
   const en = new Set(names('en').months.map((m) => m.toLowerCase()));
   const out = [];
   for (const m of text.matchAll(re)) {
-    for (const w of m[0].match(/\p{L}+/gu) || []) { const k = w.toLowerCase(); if (en.has(k) && !own.has(k)) out.push(w); }
+    for (const w of m[0].match(/\p{L}[\p{L}\p{M}]*/gu) || []) { const k = w.toLowerCase(); if (en.has(k) && !own.has(k)) out.push(w); }
   }
   return [...new Set(out)];
 }

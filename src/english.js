@@ -12,7 +12,7 @@ const en = () => (EN ||= new Set(EN_WORDS.split(' ')));
 const sharedWith = (lang) => (lang in SHARED ? (shared[lang] ||= new Set(SHARED[lang].split(' '))) : null);
 export const hasWordList = (lang) => lang in SHARED;
 /** Every word of the text is also a word of `lang` (from its word list); false when there is no list for `lang`. */
-export const sharedEntirely = (text, lang) => { const set = sharedWith(lang); const w = text.toLowerCase().match(/\p{L}+/gu) || []; return !!set && w.length > 0 && w.every((x) => set.has(x)); };
+export const sharedEntirely = (text, lang) => { const set = sharedWith(lang); const w = text.toLowerCase().match(/\p{L}[\p{L}\p{M}]*/gu) || []; return !!set && w.length > 0 && w.every((x) => set.has(x)); };
 
 // International words that are normal on pages in any language: neither English nor the target.
 const NEUTRAL = new Set(('home menu email online blog login logout newsletter password app apps wifi news shop team video audio info download upload chat status ' +
@@ -34,7 +34,7 @@ export function englishWords(text, lang) {
   const E = en(), S = sharedWith(lang), stop = STOP[lang];
   let n = 0, own = 0, shr = 0;
   const hits = [];
-  for (const raw of text.match(/\p{L}[\p{L}'’-]*/gu) || []) {
+  for (const raw of text.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []) {
     const w = raw.toLowerCase();
     if (stop && stop.has(w)) { own++; continue; }
     if (lang === 'nl' && /[a-z]['’]s$/.test(w)) { own++; continue; } // Dutch plural "persona's", "menu's", "scenario's" (English uses 's for possessives, rare in labels)
@@ -54,7 +54,7 @@ const EN_SHORT = new Set('a i an am as at be by do go he if in is it me my no of
 export function allEnglish(text) {
   const E = en(), stop = STOP.en;
   let real = 0;
-  for (const raw of text.match(/\p{L}[\p{L}'’-]*/gu) || []) {
+  for (const raw of text.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []) {
     const w = raw.toLowerCase();
     const parts = w.split(/['’-]/).filter(Boolean);
     if (stop.has(w) || NEUTRAL.has(w)) { real++; continue; }
@@ -95,7 +95,7 @@ function enWord(w, E) {
 export function englishLike(text) {
   const E = en(), stop = STOP.en;
   let real = 0;
-  for (const raw of text.match(/\p{L}[\p{L}'’-]*/gu) || []) {
+  for (const raw of text.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []) {
     if (/^[A-Z]{2,6}s?$/.test(raw)) continue; // acronym: no language
     const w = raw.toLowerCase();
     if (/[^a-z'’-]/.test(w)) return false;
@@ -114,7 +114,7 @@ export function looksEnglish(text, lang) {
   const { en: n, own, shared: s } = englishWords(text, lang);
   if (!n || own) return false;
   if (n + s === 1) { // one word: also needs tinyld to clearly prefer English for it ("Navigation", "Administrator" are German too)
-    const w = text.match(/\p{L}[\p{L}'’-]*/gu).find((x) => x.length >= 3 && !NEUTRAL.has(x.toLowerCase()));
+    const w = text.match(/\p{L}[\p{L}\p{M}'’-]*/gu).find((x) => x.length >= 3 && !NEUTRAL.has(x.toLowerCase()));
     return hasWordList(lang) && w.length >= 9 && tinyPrefersEnglish(w.toLowerCase(), lang);
   }
   return n / (n + s) >= 0.5 && (hasWordList(lang) || n >= 2);
