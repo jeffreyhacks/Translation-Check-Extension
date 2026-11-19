@@ -661,11 +661,16 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     stats.scannedN = stats.okN + stats.badN + stats.unsureN + stats.bugN + stats.nameN + stats.skipN; // every text item, in exactly one category
     for (const g of groups.slice(0, 300)) withContext(g, 12);
     // English you OK'd is still English on the page: it stays in the score (as not translated), it just isn't listed as a problem any more
-    const acceptedBad = state.items.reduce((n, it) => n + (it.v.accepted && it.v.was === 'bad' && nodeOf(it).isConnected ? it.len : 0), 0);
+    const acceptedItems = state.items.filter((it) => it.v.accepted && it.v.was === 'bad' && nodeOf(it).isConnected);
+    const acceptedBad = acceptedItems.reduce((n, it) => n + it.len, 0);
+    // shown next to the score, so a score below 100% with 0 untranslated says why (it is listed in the Ignored tab)
+    stats.acceptedN = acceptedItems.length;
     const judged = stats.ok + stats.bad + acceptedBad;
+    // 100% only when nothing counts as not translated: a little leftover English must not round up to 100%
+    const pct = judged ? Math.round((stats.ok / judged) * 100) : null;
     last = {
       lang: p.lang, requested: p.requested, mode: p.mode, host: location.hostname, pageLang: document.documentElement.lang || '', stats, auto: state.auto,
-      score: judged ? Math.round((stats.ok / judged) * 100) : null,
+      score: pct === 100 && stats.bad + acceptedBad > 0 ? 99 : pct,
       issues: groups.slice(0, 300).map((i) => ({ ...i, text: i.text.slice(0, 160) })), truncated: Math.max(0, groups.length - 300),
       // the Ignored tab: what you ignored first (it can be restored), then names, codes, technical terms and dates, each with its reason
       ignored: [...state.allIgnored].sort((a, b) => (b.byUser ? 1 : 0) - (a.byUser ? 1 : 0)).slice(0, 300).map((g) => ({ ...withContext(g, 12), text: g.text.slice(0, 160) })),
