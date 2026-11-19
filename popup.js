@@ -88,10 +88,6 @@ function renderChips() {
   box.replaceChildren();
   const { stats } = result, src = result.source || {};
   box.append(chip(ICON.globe, nameOf(result.lang), `Checked for ${nameOf(result.lang)}${result.requested === 'auto' ? ' (the page’s own language)' : ''}`));
-  const au = result.auto;
-  if (result.requested === 'auto' && au && au.declared && au.lang && au.declared !== au.lang) { // the page says one language but its text is in another
-    box.append(chip('', `Page says ${nameOf(au.declared)}`, `The page declares ${nameOf(au.declared)}, but ${au.share}% of its text is ${nameOf(au.lang)}, so it was checked as ${nameOf(au.lang)}. With live updates on, switching the page’s language re-checks automatically.`));
-  }
   if (result.kind === 'pdf') box.append(chip(ICON.doc, `PDF · ${src.pages} p.`, 'PDF document'));
   const m = result.models;
   if (m && $('#verify').checked) {

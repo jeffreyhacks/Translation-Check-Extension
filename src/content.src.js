@@ -38,7 +38,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
   const send = (m) => { try { const p = api.runtime.sendMessage(m); return p && p.then ? p : Promise.resolve(p); } catch (e) { return Promise.reject(e); } };
   const quiet = (m) => send(m).catch(() => {});
 
-  let state = null, last = null, seq = 0, busy = false, again = false, timer = 0, firstChange = 0, langDirty = false;
+  let state = null, last = null, seq = 0, busy = false, again = false, timer = 0, firstChange = 0, langDirty = false, sweeping = 0;
   let visCache = new WeakMap(), blockCache = new WeakMap(), ctxCache = new WeakMap();
   const vcache = new Map(), targets = new Map(), styled = new Map(), marks = new Map();
   let observers = [], observed = new WeakSet();
@@ -52,6 +52,59 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     visCache.set(el, v);
     return v;
   }
+  // Tooltips that are hidden until hover (`hidden group-hover:block`, `invisible`, a role="tooltip" box, the target of aria-describedby)
+  // are still interface text: they are checked while hidden, so every tooltip is covered whether or not it happens to be open.
+  // Only the tooltip box itself may be hidden; the element it belongs to must be on screen (a tooltip in a closed tab is skipped).
+  const TIP_SEL = '[role="tooltip"],[class*="tooltip" i],[class*="popover" i],[class*="tippy" i],[class*="hovercard" i],' +
+    '[class*="group-hover:"],[class*="peer-hover:"],[class*="group-focus"],[class*="peer-focus"]';
+  let describedIds = new Set();
+  function tipBox(el) {
+    if (!el || !el.closest) return null;
+    let c = el.closest(TIP_SEL);
+    if (!c && describedIds.size) for (let e = el, k = 0; e && k < 5; e = e.parentElement, k++) if (e.id && describedIds.has(e.id)) { c = e; break; }
+    if (!c || visible(c)) return null;
+    const host = c.parentElement;
+    return host && host.tagName !== 'BODY' && visible(host) ? c : null;
+  }
+  // Tooltips that exist only while open (Radix / shadcn, and libraries built the same way): during a check each tooltip button is focused for
+  // a moment, as a keyboard user would, its text is read through aria-describedby, and focus goes back. The text is listed as the button's
+  // tooltip, so it stays listed after the tooltip closes. The open tooltip's own text is then not counted a second time.
+  const TIP_TRIGGER = '[data-state="closed"],[data-state="delayed-open"],[data-state="instant-open"]';
+  const NOT_TIP_ROLE = new Set(['tab', 'option', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'checkbox', 'radio', 'switch', 'treeitem', 'combobox']);
+  const isTipTrigger = (e) => !e.hasAttribute('aria-expanded') && !e.hasAttribute('aria-haspopup') && !e.hasAttribute('aria-controls') &&
+    !/^(INPUT|TEXTAREA|SELECT|OPTION)$/.test(e.tagName) && !e.isContentEditable && !NOT_TIP_ROLE.has(e.getAttribute('role') || '') &&
+    !e.closest('[role="tooltip"],[data-radix-popper-content-wrapper]');
+  const inOpenTip = (el) => { const w = el && el.closest && el.closest('[data-radix-popper-content-wrapper]'); return !!(w && w.querySelector('[role="tooltip"]')); };
+  const settle = () => new Promise((r) => { let done = false; const go = () => { if (!done) { done = true; r(); } }; requestAnimationFrame(() => requestAnimationFrame(go)); setTimeout(go, 80); });
+  async function readTooltips(root, p, out) {
+    if (!root.querySelectorAll) return;
+    const doc = root.ownerDocument || root;
+    const trig = [...root.querySelectorAll(TIP_TRIGGER)].filter((e) => isTipTrigger(e) && !blocked(e) && visible(e)).slice(0, 300);
+    if (!trig.length) return;
+    const prev = doc.activeElement;
+    sweeping++;
+    try {
+      for (const e of trig) {
+        if (out.length >= MAX_ITEMS) break;
+        let text = '';
+        try {
+          e.focus({ preventScroll: true });
+          await settle();
+          const id = e.getAttribute('aria-describedby');
+          const tip = id && doc.getElementById(id);
+          if (tip && tip.getAttribute('role') === 'tooltip') text = clean(tip.textContent || '');
+        } catch (err) { /* a button that can't take focus */ }
+        try { e.blur(); } catch (err) { /* ignore */ }
+        if (text && collectable(text, p)) out.push({ kind: 'attr', attr: 'tooltip', text, el: e });
+      }
+    } finally {
+      try { if (prev && prev !== doc.body && prev.isConnected && prev.focus) prev.focus({ preventScroll: true }); } catch (err) { /* ignore */ }
+      await settle();
+      observers.forEach((o) => o.takeRecords()); // the tooltips we opened and closed are not page changes
+      sweeping--;
+    }
+  }
+  const TIP_ATTRS = ['data-tooltip', 'data-tip', 'data-tippy-content', 'data-bs-original-title', 'data-original-title'];
   const collectable = (t, p) => t.length >= 2 && !URLISH.test(t) && (/\p{L}/u.test(t) || /[{%]/.test(t) || (p.hints && /\d/.test(t)));
   const blocked = (el) => !!(el.closest && (el.closest(NO_TRANSLATE) || el.closest(SKIP_SEL)));
 
@@ -77,20 +130,25 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       if ((++n & 255) === 0 && performance.now() - t0 > 12) { await tick(); t0 = performance.now(); }
       const node = walker.currentNode;
       const text = clean(node.nodeValue || '');
-      if (collectable(text, p) && visible(node.parentElement || node.parentNode?.host)) out.push({ kind: 'text', text, node });
+      if (!collectable(text, p)) continue;
+      const parent = node.parentElement || node.parentNode?.host;
+      if (inOpenTip(parent)) continue; // read from its button (readTooltips)
+      if (visible(parent)) out.push({ kind: 'text', text, node });
+      else { const box = tipBox(parent); if (box) out.push({ kind: 'text', text, node, tip: box }); }
     }
     if (p.attrs && root.querySelectorAll) {
-      const sel = '[placeholder],[alt],[title],[aria-label],input[type=submit],input[type=button]';
+      const sel = '[placeholder],[alt],[title],[aria-label],input[type=submit],input[type=button],' + TIP_ATTRS.map((a) => `[${a}]`).join(',');
       for (const el of root.querySelectorAll(sel)) {
         if (out.length >= MAX_ITEMS) break;
         if (blocked(el) || !visible(el)) continue;
-        for (const attr of ['placeholder', 'alt', 'title', 'aria-label', 'value']) {
+        for (const attr of ['placeholder', 'alt', 'title', 'aria-label', 'value', ...TIP_ATTRS]) {
           if (attr === 'value' && !/^(submit|button)$/.test(el.type || '')) continue;
           const text = clean(el.getAttribute(attr) || '');
           if (collectable(text, p)) out.push({ kind: 'attr', attr, text, el });
         }
       }
     }
+    await readTooltips(root, p, out);
     for (const sr of shadows) await collectFrom(sr, p, out, scope, depth);
     if (depth < 3) for (const f of frames) { try { const b = f.contentDocument && f.contentDocument.body; if (b) await collectFrom(b, p, out, scope, depth + 1); } catch (e) { /* cross-origin */ } }
   }
@@ -512,7 +570,11 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     if (!el) return null;
     const ck = t.kind === 'attr' ? el : n;
     let c = ctxCache.get(ck);
-    if (!c) { c = describe(t.kind === 'text' ? n : null, el, t.kind === 'attr' ? t.attr : undefined); ctxCache.set(ck, c); }
+    if (!c) {
+      c = describe(t.kind === 'text' ? n : null, el, t.kind === 'attr' ? t.attr : undefined);
+      if (t.tip && c) c = { ...c, kind: 'tooltip (shown on hover)' };
+      ctxCache.set(ck, c);
+    }
     return c;
   }
   function withContext(g, limit) {
@@ -557,10 +619,16 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     if (!n.isConnected) return false;
     unfocus();
     const el = t.kind === 'text' ? n.parentElement || n.parentNode?.host : n;
-    el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     const win = winOf(n);
     focused = { win, el: null, timer: 0 };
-    if (t.kind === 'text') {
+    const host = t.tip && !(t.tip.checkVisibility ? t.tip.checkVisibility({ visibilityProperty: true }) : t.tip.getClientRects().length) && t.tip.parentElement; // a tooltip that is closed: point at what it belongs to
+    if (host) {
+      host.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      ensureStyle(host.getRootNode());
+      host.setAttribute(A_FOCUS, NS);
+      focused.el = host;
+    } else el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (host) { /* outlined above */ } else if (t.kind === 'text') {
       const r = n.ownerDocument.createRange();
       r.selectNodeContents(n);
       const h = new win.Highlight(r);
@@ -633,6 +701,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     observed.add(root);
     const mo = new MutationObserver((records) => {
       if (orphaned()) return retire();
+      if (sweeping) return; // our own opening and closing of tooltips
       for (const r of records) {
         if (r.type === 'characterData') { const e = r.target.parentElement || r.target.parentNode?.host; if (e) dirty.add(e); }
         else {
@@ -681,6 +750,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       const roots = [...dirty].filter((e) => e && e.isConnected);
       dirty.clear();
       visCache = new WeakMap();
+      describedIds = new Set([...document.querySelectorAll('[aria-describedby]')].flatMap((e) => e.getAttribute('aria-describedby').split(/\s+/)).filter(Boolean));
       state.items = state.items.filter((it) => nodeOf(it).isConnected && !roots.some((r) => r.contains(nodeOf(it))));
       const raw = [];
       for (const r of roots) await collectFrom(r, state.p, raw, state.scope);
@@ -707,6 +777,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const my = ++seq;
     clearAll();
     visCache = new WeakMap(); blockCache = new WeakMap();
+    describedIds = new Set([...document.querySelectorAll('[aria-describedby]')].flatMap((e) => e.getAttribute('aria-describedby').split(/\s+/)).filter(Boolean));
     const p = {
       lang, requested: params.lang, mode: params.mode || 'balanced', attrs: !!params.attrs, unsure: !!params.unsure,
       related: params.related !== false, ignore: params.ignore || [], hints: !!params.hints,

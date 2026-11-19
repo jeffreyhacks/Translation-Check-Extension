@@ -32,8 +32,7 @@ Click a row to scroll to it on the page; **‹ ›** step through the list. Each
 - **how the three models voted**: three dots (red: another language, green: the target, grey: no answer) and a ✓ when at least two agree;
 - **why it was flagged**: *Looks like English text*, *Name or title? Two language models read it as English*, *Identical to the source-language page*, and so on.
 
-Chips under the score summarise the check: the language checked, *Page says English* when the page declares a different language than it
-shows, how many names and codes were skipped, and whether live updates are on.
+Chips under the score summarise the check: the language checked, how many names and codes were skipped, and whether live updates are on.
 
 ### Repeated text
 The same text with the same verdict is one row, marked **×N**. Click it again (or use **‹ ›** under it, *Copy 2 of 3*) to visit each place it
@@ -122,6 +121,19 @@ every copy gets the same verdict. A single unknown capitalised word ("Wisight", 
 column or set of cards as other titles. Native phrases ("Persona standard") and words the target language also uses ("Status", "Export")
 are not held.
 
+### Tooltips
+Tooltip text is checked whether or not the tooltip is open:
+- **Tooltips that exist only while open** (Radix / shadcn/ui and libraries built the same way): during a check, each tooltip button is
+  focused for a moment, as a keyboard user would, its text is read and focus goes back. The text is listed as the button's tooltip, so it
+  stays listed after the tooltip closes, and an open tooltip is not counted twice.
+- **Tooltips hidden until hover** (a `role="tooltip"` box, the target of `aria-describedby`, `hidden group-hover:block` or `invisible`
+  boxes): their text is checked while hidden and highlighted as soon as the tooltip opens. Clicking the row outlines what the tooltip
+  belongs to. Hidden text that is not a tooltip (a closed tab, a template) is not checked.
+- **Tooltip attributes**: `title`, `data-tooltip`, `data-tip`, `data-tippy-content` and Bootstrap's original-title, with *Placeholders &
+  tooltips* on.
+
+Buttons that open menus, accordions or dialogs (`aria-expanded`, `aria-haspopup`, `aria-controls`) and form fields are never focused.
+
 ### Names
 People, places and brands read the same in every language, so they are neither translated nor untranslated. They are counted
 (*5 names*), never highlighted, and don't affect the score. A name is recognised from built-in lists (about 13,000 given names and
@@ -134,8 +146,8 @@ hints* on, an English month name on a non-English page ("Dec 3" on a German page
 
 ## Page's own language
 Many apps switch their interface language without updating `<html lang>`. With **Page's own language** selected, the page's own text
-decides as well: a page that declares English (or nothing) but whose longer text is mostly another language is checked in that language,
-with a *Page says English* chip. A page that declares another language keeps it, unless that language is essentially absent. With live
+decides as well: a page that declares English (or nothing) but whose longer text is mostly another language is checked in that language.
+A page that declares another language keeps it, unless that language is essentially absent. With live
 updates on, switching the app's interface language re-checks the page in the new language by itself.
 
 ## Live updates

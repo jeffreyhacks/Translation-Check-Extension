@@ -1,0 +1,51 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Tableau de bord</title>
+<style>
+  .hidden{display:none} .invisible{visibility:hidden} .group:hover .group-hover\:block{display:block} .group:hover .group-hover\:visible{visibility:visible}
+  .card{border:1px solid #ccc;padding:12px;margin:8px;position:relative} .tip{position:absolute;top:100%;left:0;background:#222;color:#fff;padding:6px;width:320px}
+  [role=tooltip]{display:none} .info:hover + [role=tooltip]{display:block}
+</style></head><body><main>
+<h1>Tableau de bord</h1>
+<p>Bienvenue sur votre tableau de bord. Vous y trouverez vos évaluations, votre classement et votre progression.</p>
+<div class="card"><h2>Classement</h2><p>Votre classement d'équipe (1 / 5)</p>
+  <span class="group" id="g1"><button class="info" aria-label="Plus d'informations">i</button>
+    <div class="tip hidden group-hover:block"><p>These counts use live evaluations that include skill scores. Sessions finished while using Test as trainee are not counted.</p></div></span></div>
+<div class="card"><h2>Évaluations</h2><p>10 évaluation · 15 évaluation(s) de pratique</p>
+  <span class="group" id="g2"><button class="info" aria-label="Informations">i</button>
+    <div class="tip invisible group-hover:visible"><p>Practice sessions are counted separately from assessments.</p></div></span></div>
+<div class="card"><h2>Progression</h2><p>Progression des compétences</p>
+  <button class="info" id="b3">i</button><div role="tooltip" class="tip">Skill Progress follows the same rule as the assessment count above.</div></div>
+<div class="card"><h2>Badges</h2><p>Vos badges obtenus</p>
+  <button id="b4" aria-describedby="desc4">i</button><div id="desc4" class="tip" style="display:none">Badges are awarded after every completed assessment.</div></div>
+<div class="card"><h2>Équipe</h2><p>Membres de votre équipe</p><button id="b5" data-tooltip="Invite your colleagues to join the team">i</button></div>
+<div class="card"><h2>Aide</h2><p>Une info-bulle déjà traduite.</p>
+  <span class="group"><button class="info">i</button><div class="tip hidden group-hover:block"><p>Cette valeur est calculée chaque nuit à partir de vos évaluations terminées.</p></div></span></div>
+<div class="card" id="radixCard"><h2>Statistiques</h2><p>Vos statistiques de la semaine</p>
+  <button class="rx" id="rx1" data-state="closed" aria-label="Plus d'informations" data-tip-text="These counts use live evaluations that include skill scores.">i</button>
+  <button class="rx" id="rx2" data-state="closed" aria-label="Plus d'informations" data-tip-text="Votre position sur le classement de l'équipe, basée sur votre score.">i</button>
+  <button class="rx" id="rx3" data-state="closed" aria-label="Plus d'informations" data-tip-text="Only assessments count toward this number and your profile averages.">i</button>
+  <button id="acc" data-state="closed" aria-expanded="false">Détails</button>
+  <button id="menu" data-state="closed" aria-haspopup="menu">Options</button></div>
+<script>
+// Radix-style tooltips: the content exists only while open, rendered in a portal at the end of <body>, with a visually hidden role="tooltip" copy
+window.__opened = [];
+let n = 0;
+for (const b of document.querySelectorAll('button[data-state]')) b.addEventListener('focus', () => window.__opened.push(b.id));
+function open(b) {
+  if (b.__tip) return;
+  const id = 'radix-' + (++n), w = document.createElement('div');
+  w.setAttribute('data-radix-popper-content-wrapper', '');
+  w.innerHTML = '<div class="tip" data-state="instant-open"></div>';
+  w.firstChild.textContent = b.dataset.tipText;
+  const sr = document.createElement('span'); sr.id = id; sr.setAttribute('role', 'tooltip'); sr.textContent = b.dataset.tipText;
+  sr.style.cssText = 'position:absolute;border:0;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap';
+  w.firstChild.append(sr); document.body.append(w);
+  b.setAttribute('aria-describedby', id); b.setAttribute('data-state', 'instant-open'); b.__tip = w;
+}
+function close(b) { const w = b.__tip; if (!w) return; b.__tip = null; b.removeAttribute('aria-describedby'); b.setAttribute('data-state', 'closed'); setTimeout(() => w.remove(), 150); }
+for (const b of document.querySelectorAll('.rx')) { b.addEventListener('focus', () => open(b)); b.addEventListener('blur', () => close(b)); b.addEventListener('mouseenter', () => open(b)); b.addEventListener('mouseleave', () => close(b)); }
+</script>
+<!-- hidden content that is NOT a tooltip, and a tooltip inside a closed panel: neither is checked -->
+<section class="hidden" id="closedTab"><p>This closed tab panel is written in English but is not shown.</p>
+  <span class="group"><button>i</button><div class="tip hidden group-hover:block"><p>This tooltip sits in a closed panel and is not shown.</p></div></span></section>
+<template><p>Template content in English is never shown.</p></template>
+</main></body></html>
