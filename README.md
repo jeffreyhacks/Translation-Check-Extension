@@ -32,8 +32,7 @@ Click a row to scroll to it on the page; **‹ ›** step through the list. Each
 - **how the three models voted**: three dots (red: another language, green: the target, grey: no answer) and a ✓ when at least two agree;
 - **why it was flagged**: *Looks like English text*, *Name or title? Two language models read it as English*, *Identical to the source-language page*, and so on.
 
-Chips under the score summarise the check: the language checked, *Page says English* when the page declares a different language than it
-shows, how many names and codes were skipped, and whether live updates are on.
+Chips under the score summarise the check: the language checked, how many names and codes were skipped, and whether live updates are on.
 
 ### Repeated text
 The same text with the same verdict is one row, marked **×N**. Click it again (or use **‹ ›** under it, *Copy 2 of 3*) to visit each place it
@@ -147,8 +146,8 @@ hints* on, an English month name on a non-English page ("Dec 3" on a German page
 
 ## Page's own language
 Many apps switch their interface language without updating `<html lang>`. With **Page's own language** selected, the page's own text
-decides as well: a page that declares English (or nothing) but whose longer text is mostly another language is checked in that language,
-with a *Page says English* chip. A page that declares another language keeps it, unless that language is essentially absent. With live
+decides as well: a page that declares English (or nothing) but whose longer text is mostly another language is checked in that language.
+A page that declares another language keeps it, unless that language is essentially absent. With live
 updates on, switching the app's interface language re-checks the page in the new language by itself.
 
 ## Live updates

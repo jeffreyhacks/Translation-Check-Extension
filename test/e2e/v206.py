@@ -184,7 +184,7 @@ with sync_playwright() as p:
     pg.goto(A); pg.bring_to_front()
     pop.evaluate("u => { window.__T = u; }", A); set_lang(pop, 'auto'); pop.click('#tabBad'); pop.click('#scan'); time.sleep(1); wait_idle(pop)
     chips = pop.eval_on_selector_all('#chips .chip', 'els => els.map(e => e.textContent.trim())')
-    t('own language: a page that says English but shows Hindi is checked as Hindi', 'Hindi' in chips and any('Page says English' in c for c in chips), chips)
+    t('own language: a page that says English but shows Hindi is checked as Hindi', 'Hindi' in chips and not any('Page says' in c for c in chips), chips)
     t('own language: no "wrong target" banner, Hindi text is not flagged', not pop.is_visible('#mismatch') and not any('सत्र' in x for x in snippets(pop)), (pop.is_visible('#mismatch'), snippets(pop)[:5]))
     pg.bring_to_front(); pg.click('#uiLang'); time.sleep(3.5)   # the user switches the app to English; no click in the extension
     pop.bring_to_front(); time.sleep(0.3)
