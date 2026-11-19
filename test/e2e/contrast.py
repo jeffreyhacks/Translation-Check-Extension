@@ -65,7 +65,7 @@ with sync_playwright() as p:
     for scheme in ['dark', 'light']:
         pop.emulate_media(color_scheme=scheme); time.sleep(0.3)
         problems = []
-        for tab in ['#tabBad', '#tabUnsure']:
+        for tab in ['#tabBad', '#tabUnsure', '#tabSkip']:
             pop.click(tab); time.sleep(0.2); problems += pop.evaluate(AUDIT)
         pop.click('#settingsBtn'); time.sleep(0.2); problems += pop.evaluate(AUDIT); pop.click('#settingsBtn'); time.sleep(0.2)
         problems = sorted(set(problems))

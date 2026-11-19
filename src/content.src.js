@@ -527,7 +527,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       if (it.v.assumed) state.assumedN--;
       const was = it.v.assumed ? 'unsure' : it.v.v;
       const what = { bad: 'not translated', unsure: 'unclear', ok: 'translated', name: 'a name', skip: 'a code or ID' }[was] || was;
-      it.v = { v: 'skip', reason: `OK’d by you (the models read it as ${what}${it.v.reason && !it.v.assumed && was !== 'skip' ? ': ' + it.v.reason : ''})`, accepted: true, was, votes: it.v.votes, detected: it.v.detected };
+      it.v = { v: 'skip', reason: `Ignored by you (the models read it as ${what}${it.v.reason && !it.v.assumed && was !== 'skip' ? ': ' + it.v.reason : ''})`, accepted: true, was, votes: it.v.votes, detected: it.v.detected };
     }
   }
 
@@ -608,7 +608,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const addIgnored = (it, reason) => {
       const myId = ++id;
       targets.set(myId, it);
-      ignored.push({ id: myId, verdict: 'skip', kind: it.kind, attr: it.attr, reason, text: it.text.slice(0, 300), len: it.text.length, votes: it.v?.votes });
+      // byUser: on your ignore list (Ignore in the popup or on the page), so it can be restored; was: its tab before you ignored it
+      const byUser = !!it.v?.accepted || /^On your ignore list/.test(reason || '');
+      ignored.push({ id: myId, verdict: 'skip', kind: it.kind, attr: it.attr, reason, text: it.text.slice(0, 300), len: it.text.length, votes: it.v?.votes, byUser, was: it.v?.was, detected: it.v?.detected });
     };
     const add = (it, verdict, reason, detected, extra) => {
       const myId = ++id;
@@ -665,6 +667,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       lang: p.lang, requested: p.requested, mode: p.mode, host: location.hostname, pageLang: document.documentElement.lang || '', stats, auto: state.auto,
       score: judged ? Math.round((stats.ok / judged) * 100) : null,
       issues: groups.slice(0, 300).map((i) => ({ ...i, text: i.text.slice(0, 160) })), truncated: Math.max(0, groups.length - 300),
+      // the Ignored tab: what you ignored first (it can be restored), then names, codes, technical terms and dates, each with its reason
+      ignored: [...state.allIgnored].sort((a, b) => (b.byUser ? 1 : 0) - (a.byUser ? 1 : 0)).slice(0, 300).map((g) => ({ ...withContext(g, 12), text: g.text.slice(0, 160) })),
       source: state.sourceInfo, models: state.models, live: p.live && !!observers.length,
     };
   }
@@ -863,7 +867,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
          box-shadow:0 6px 24px rgba(20,33,61,.18);padding:8px 10px;max-width:300px}
       .h{font-weight:600;color:${color};margin-bottom:2px}.r{margin:2px 0}.m{color:#566176;font-size:11.5px}
       .b{display:flex;gap:6px;margin-top:7px}button{font:inherit;font-size:12px;border:1px solid #c9d1de;background:#f6f8fb;color:#14213d;border-radius:6px;padding:3px 9px;cursor:pointer}
-      button:hover{background:#eaeef5}button.p{background:${color};border-color:${color};color:#fff}</style>
+      button:hover{background:#eaeef5}button.p{background:${color};border-color:${color};color:#fff}button.ok{margin-left:auto}</style>
       <div class="c" role="dialog" aria-label="Translation Check"><div class="h"></div><div class="r"></div><div class="m"></div><div class="b"></div></div>`;
     root.querySelector('.h').textContent = i.marked ? 'Not translated (marked by you)' : i.verdict === 'bad' ? 'Not translated' : 'Unclear';
     root.querySelector('.r').textContent = i.reason || 'Too short or ambiguous to judge';
@@ -871,13 +875,11 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const btns = root.querySelector('.b');
     const btn = (label, cls, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.className = cls; b.title = title; b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); hideCard(true); fn(); }); btns.append(b); };
     const text = t.text;
-    // OK never makes text "translated": on text you marked it undoes the mark (back to Unclear, or to what the models said); otherwise the text
-    // is listed as Ignored ("OK'd by you"), and English you accept still counts against the score.
-    if (i.marked) btn('OK', '', 'Undo your mark: back to what the language models said (Unclear)', () => decide('unmark', text));
-    else {
-      if (i.verdict === 'unsure') btn('Not translated', 'p', 'List it as untranslated on every check of this site', () => decide('mark', text));
-      btn('OK', '', 'Stop flagging it on this site. It is listed as Ignored, and if it is untranslated it still counts against the score', () => decide('ignore', text));
-    }
+    // OK only closes the card: the text keeps its underline, its tab and its counts. Changing its status takes a button that says so.
+    if (i.marked) btn('Unmark', '', 'Undo your mark: back to what the language models said (Unclear)', () => decide('unmark', text));
+    else if (i.verdict === 'unsure') btn('Not translated', 'p', 'List it as untranslated on every check of this site', () => decide('mark', text));
+    btn('Ignore', '', 'Stop flagging it on this site: it moves to the Ignored tab (restore it there). Untranslated text still counts against the score', () => decide('ignore', text));
+    btn('OK', 'ok', 'Close this card. Nothing changes', () => {});
     host.addEventListener('mouseleave', () => hideCard(false));
     document.documentElement.appendChild(host);
     const box = root.querySelector('.c').getBoundingClientRect();

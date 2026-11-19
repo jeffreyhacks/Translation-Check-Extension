@@ -4,7 +4,7 @@ const api = globalThis.chrome?.runtime?.id ? globalThis.chrome : (globalThis.bro
 const $ = (s) => document.querySelector(s);
 const IS_PANEL = document.body.classList.contains('panel');
 const LANGS = 'en es fr de it pt nl sv da no fi pl cs sk hu ro bg hr el tr ru uk ar fa he ur hi bn ta te th vi id ms sw ja ko zh ca'.split(' ');
-const VIEWS = { bad: '#tabBad', unsure: '#tabUnsure', bug: '#tabBug', fmt: '#tabFmt' };
+const VIEWS = { bad: '#tabBad', unsure: '#tabUnsure', bug: '#tabBug', fmt: '#tabFmt', skip: '#tabSkip' };
 // Ignore-list learning (learn.js, loaded before this file). Missing in very old builds: then Ignore just adds the term, as before.
 const L = globalThis.TCLearn || null;
 const english = new Intl.DisplayNames(['en'], { type: 'language' });
@@ -64,7 +64,7 @@ async function ensureInjected() {
 }
 
 // ---------- Rendering ----------
-const rowsNow = () => (result ? result.issues.filter((i) => i.verdict === view) : []);
+const rowsNow = () => (result ? (view === 'skip' ? result.ignored || [] : result.issues.filter((i) => i.verdict === view)) : []);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 function chip(icon, text, title, cls = '') {
   const c = el('span', 'chip ' + cls);
@@ -139,8 +139,9 @@ function render() {
 
   // Tab counts are rows in the list, the same number the navigator steps through ("0 / 23"); the same text in several places is one row (×N).
   // The big numbers above count every place on the page.
-  const places = { bad: stats.badN, unsure: stats.unsureN, bug: stats.bugN, fmt: stats.fmtN };
-  const counts = Object.fromEntries(Object.keys(places).map((k) => [k, (result.issues || []).filter((i) => i.verdict === k).length]));
+  const places = { bad: stats.badN, unsure: stats.unsureN, bug: stats.bugN, fmt: stats.fmtN, skip: (stats.nameN || 0) + (stats.skipN || 0) };
+  const counts = Object.fromEntries(Object.keys(places).map((k) => [k, k === 'skip' ? (result.ignored || []).length : (result.issues || []).filter((i) => i.verdict === k).length]));
+  $('#tabSkip').hidden = !counts.skip;
   $('#tabBug').hidden = !stats.bugN;
   $('#tabFmt').hidden = !$('#hints').checked && !stats.fmtN;
   if ($(VIEWS[view]).hidden) view = 'bad';
@@ -159,7 +160,7 @@ function render() {
   $('#pos').textContent = `${cursor + 1} / ${rows.length}`;
   $('#prev').disabled = $('#next').disabled = !rows.length;
   if (!rows.length) {
-    list.append(el('li', 'empty', { bad: 'Nothing untranslated 🎉', unsure: 'Nothing unclear', bug: 'No broken text', fmt: 'No format hints' }[view]));
+    list.append(el('li', 'empty', { bad: 'Nothing untranslated 🎉', unsure: 'Nothing unclear', bug: 'No broken text', fmt: 'No format hints', skip: 'Nothing ignored' }[view]));
     return;
   }
   rows.forEach((i, idx) => {
@@ -205,6 +206,15 @@ function render() {
       const next = el('button', 'icon sm occ-next', '›'); next.title = 'Next place with this text'; next.setAttribute('aria-label', next.title); next.addEventListener('click', () => go(1));
       nav.append(prev, el('span', 'occpos', `Copy ${at + 1} of ${occ.length}`), next);
       li.append(nav);
+    }
+    if (i.verdict === 'skip' && i.byUser) { // ignored by you: restore it to the tab it came from
+      const acts = el('div', 'acts');
+      const back = { bad: 'Untranslated', unsure: 'Unclear', name: 'the check', skip: 'the check' }[i.was] || 'the check';
+      const r = el('button', 'ignore-btn restore-btn', 'Restore');
+      r.title = `Take it off the ignore list: back to ${back}`;
+      r.addEventListener('click', () => removeIgnore(i.text));
+      acts.append(r);
+      li.append(acts);
     }
     if ((i.verdict === 'bad' || i.verdict === 'unsure') && i.text.length <= 60) { // one-click "never flag this" / "this is untranslated"
       const acts = el('div', 'acts');
@@ -392,6 +402,14 @@ async function removeMarked(term) {
   syncIgnoreBoxes();
   await save();
   await runScan({ keepView: true });
+}
+// Restore from the Ignored tab: off the ignore list (this site and all sites), so the next check lists it where the models put it.
+async function removeIgnore(term) {
+  drop(ign, term);
+  syncIgnoreBoxes();
+  await save();
+  await runScan({ keepView: true });
+  setStatus(`“${term.length > 40 ? term.slice(0, 40) + '…' : term}” restored.`);
 }
 async function addIgnore(term, issue) {
   const list = host ? (ign.sites[host] = ign.sites[host] || []) : ign.global;

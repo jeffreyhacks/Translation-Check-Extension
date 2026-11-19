@@ -70,7 +70,7 @@ const NAMES = ['Truecost', 'Testproj123', 'Customer Support Hub', 'Skill Scout',
   const txt = host?.shadowRoot.textContent || '';
   t('hover: a card shows "Unclear", the reason and the model agreement', /Unclear/.test(txt) && /Name or title\? Could be untranslated/.test(txt) && /\d\/3 models/.test(txt), txt);
   const buttons = host ? [...host.shadowRoot.querySelectorAll('button')].map((b) => b.textContent) : [];
-  t('hover: the card offers "Not translated" and "OK"', buttons.join() === 'Not translated,OK', buttons.join());
+  t('hover: the card offers "Not translated", "Ignore" and "OK"', buttons.join() === 'Not translated,Ignore,OK', buttons.join());
   host.shadowRoot.querySelector('button').click();
   await sleep(400);
   t('hover: "Not translated" saves the text in the marked list for this site', sets.length && store.marked.sites['knowledge-harvestor.artisanscloud.com'].includes('Smart Service Analytics'), JSON.stringify(store));
@@ -83,13 +83,13 @@ const NAMES = ['Truecost', 'Testproj123', 'Customer Support Hub', 'Skill Scout',
   cell2.dispatchEvent(new h.w.MouseEvent('mousemove', { bubbles: true, clientX: 60, clientY: 60 }));
   await sleep(80);
   const host2 = [...d.documentElement.children].find((e) => e.shadowRoot);
-  [...host2.shadowRoot.querySelectorAll('button')].find((b) => b.textContent === 'OK').click();
+  [...host2.shadowRoot.querySelectorAll('button')].find((b) => b.textContent === 'Ignore').click();
   await sleep(400);
   const st2 = await h.call({ type: 'status' });
-  t('hover: "OK" puts the text on this site\'s ignore list and it is no longer listed', store.ignore.sites['knowledge-harvestor.artisanscloud.com'].includes('Testproj123') && !st2.result.issues.some((i) => i.text === 'Testproj123'), JSON.stringify(store.ignore));
+  t('hover: "Ignore" puts the text on this site\'s ignore list and it is no longer listed', store.ignore.sites['knowledge-harvestor.artisanscloud.com'].includes('Testproj123') && !st2.result.issues.some((i) => i.text === 'Testproj123'), JSON.stringify(store.ignore));
   t('hover: the earlier mark is kept', st2.result.issues.find((i) => i.text === 'Smart Service Analytics')?.marked);
   const ex = await h.call({ type: 'export' });
-  t('export: the OK\'d text is listed as ignored, with the reason', ex.issues.some((i) => i.text === 'Testproj123' && i.verdict === 'skip' && /^OK’d by you \(the models read it as unclear/.test(i.reason)), JSON.stringify(ex.issues.filter((i) => i.verdict === 'skip').map((i) => [i.text, i.reason])));
+  t('export: the ignored text is listed as ignored, with the reason', ex.issues.some((i) => i.text === 'Testproj123' && i.verdict === 'skip' && /^Ignored by you \(the models read it as unclear/.test(i.reason)), JSON.stringify(ex.issues.filter((i) => i.verdict === 'skip').map((i) => [i.text, i.reason])));
 }
 // with "Mark unclear text" off, unclear text is not underlined and has no card
 {

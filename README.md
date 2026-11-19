@@ -25,6 +25,7 @@ The popup shows a score (the share of the page's text that is in the target lang
 | **Untranslated** | Text in another language than the target. Highlighted in yellow with a red wavy underline on the page. |
 | **Unclear** | Text the models can't judge with confidence (very short text, names and titles, words shared by several languages), always with a reason. An orange wavy underline on the page. |
 | **Broken** | Leaked translation keys (`checkout.button.save`), unfilled placeholders (`{{name}}`, `%s`, `{0}`), `undefined`/`NaN`, `[object Object]` and missing-translation markers. Shown only when something is found. |
+| **Ignored** | Names, codes and IDs, technical terms, dates and times, and what you ignored, each with its reason. What you ignored is listed first and has **Restore**, which takes it off the ignore list and puts it back in the tab it came from. Shown when something was ignored. |
 | **Format** | Date and time formats that don't fit the language (always checked), and number and price formats (with *Format hints* on). Shown when something is found. |
 
 Click a row to scroll to it on the page; **‹ ›** step through the list. Each row shows:
@@ -45,14 +46,14 @@ Untranslated text keeps its yellow highlight and red wavy underline; unclear tex
 on by default). The wavy underlines are only on the page: the popup's legend shows the same colours as plain dots, like the tabs.
 
 With *Card on underlined text* (Settings › On the page, on by default) pointing at underlined text shows a small card with the reason
-and how many models read another language, and you can decide there:
+and how many models read another language, and you can act there:
+- **OK** closes the card. Nothing else changes: the text keeps its underline, its tab and the counts.
 - **Not translated** (unclear text): listed as untranslated on every check of the site.
-- **OK** on text you marked as untranslated: undoes your mark, so it goes back to **Unclear** (or to what the models said) with its
-  orange underline.
-- **OK** on anything else: the text is put on this site's ignore list and listed as **Ignored** (*OK’d by you*, with what the models read).
+- **Unmark** (text you marked as untranslated): undoes your mark, back to **Unclear** (or to what the models said).
+- **Ignore**: the text is put on this site's ignore list and moves to the **Ignored** tab (*Ignored by you*, with what the models read).
 
-OK never makes text *translated*. The Translated count only counts text in the page's language, and text the models read as untranslated
-still counts against the percentage after you OK it: it is still English on the page, it just isn't listed as a problem any more.
+Ignoring never makes text *translated*. The Translated count only counts text in the page's language, and text the models read as
+untranslated still counts against the percentage after you ignore it: it is still English on the page, it just isn't listed as a problem.
 The decision goes into the same lists as the popup's buttons, the page is checked again, and an open popup or side panel follows.
 With the card switched off, decide with the buttons on each row in the popup; switching it on or off applies to the checked page at once.
 
@@ -68,8 +69,8 @@ appears; returning to a row resumes at the copy you were on. The page marks the 
 Every row under **Unclear** has two buttons:
 - **Untranslated** moves every copy of the text (capitals ignored) to **Untranslated**, highlights it and counts it in the score, with the
   reason *Marked untranslated by you*. It stays untranslated on every later check of the site. **Unmark** on that row undoes it.
-- **Ignore** stops the text from being flagged on this site. Rows under Untranslated have **Ignore** too. Like **OK** on the page, it
-  lists the text as Ignored and never counts it as translated.
+- **Ignore** stops the text from being flagged on this site. Rows under Untranslated have **Ignore** too. Like **Ignore** on the page, it
+  moves the text to the Ignored tab (with **Restore**) and never counts it as translated.
 
 The latest choice wins: marking an ignored text removes it from the ignore list, and the other way round.
 

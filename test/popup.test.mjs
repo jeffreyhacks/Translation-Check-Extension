@@ -398,7 +398,7 @@ const G = {
   const csv = (await readBlob(p.w, p.downloads.find((d) => d.size))).replace(/^﻿/, '');
   const rows = csv.split('\r\n').slice(1);
   t('projects csv: unclear rows are in the export with a reason', rows.some((r) => r.startsWith('"Can’t tell","Smart Service Analytics","Name or title')), rows.filter((r) => /Smart/.test(r)).join('\n'));
-  t('projects csv: ignored rows are in the export with a reason', rows.some((r) => r.startsWith('"Ignored","Wisight","OK’d by you (the models read it as unclear')) && rows.some((r) => /^"Ignored","\d\d\.\d\d\.2026","Date or time/.test(r)), rows.filter((r) => r.startsWith('"Ignored"')).slice(0, 3).join('\n'));
+  t('projects csv: ignored rows are in the export with a reason', rows.some((r) => r.startsWith('"Ignored","Wisight","Ignored by you (the models read it as unclear')) && rows.some((r) => /^"Ignored","\d\d\.\d\d\.2026","Date or time/.test(r)), rows.filter((r) => r.startsWith('"Ignored"')).slice(0, 3).join('\n'));
   // a decision made on the page (hover card) reaches this window through storage
   p.storageChanged({ marked: { newValue: { global: [], sites: { 'knowledge-harvestor.artisanscloud.com': ['Smart Service Analytics'] } } } });
   p.$('#settingsBtn').click();
@@ -424,6 +424,25 @@ const G = {
   t('207 setting: with the card off, the legend points to the row buttons', /buttons on each row/.test(p.$('#legendTip').textContent));
   const p2 = await boot('popup.html', 'https://shop.example.com/x', { store: { opts: { hoverCard: false, unclearMarks: 2 } } });
   t('207 setting: the choice is remembered', p2.$('#hoverCard').checked === false);
+}
+
+// ---------- 2.0.7: Ignored tab, Restore ----------
+{
+  const R = { ...RESULT, ignored: [
+    { id: 30, verdict: 'skip', kind: 'text', text: 'Customer Support Hub', reason: 'Ignored by you (the models read it as not translated: Looks like English text)', byUser: true, was: 'bad', count: 1, occ: [{ id: 30 }] },
+    { id: 31, verdict: 'skip', kind: 'text', text: 'AB-1001', reason: 'Code, number or ID (letters mixed with digits)', count: 1, occ: [{ id: 31 }] }] };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: R, store: { ignore: { global: [], sites: { 'shop.example.com': ['Customer Support Hub'] } } } });
+  p.$('#scan').click(); await sleep(60);
+  t('207 ignored: the Ignored tab is shown with one row per ignored text', !p.$('#tabSkip').hidden && p.$('#tabSkip .n').textContent === '2');
+  p.$('#tabSkip').click(); await sleep(20);
+  const rows = p.d.querySelectorAll('#list li.skip');
+  t('207 ignored: rows show the reason', rows.length === 2 && /Ignored by you/.test(rows[0].textContent) && /Code, number or ID/.test(rows[1].textContent));
+  t('207 ignored: only what you ignored has Restore', !!rows[0].querySelector('.restore-btn') && !rows[1].querySelector('.restore-btn') && /back to Untranslated/.test(rows[0].querySelector('.restore-btn').title));
+  const scans = p.sent.filter((m) => m.type === 'scan').length;
+  rows[0].querySelector('.restore-btn').click(); await sleep(80);
+  t('207 restore: off the ignore list, and the page is checked again', !(p.store.ignore.sites['shop.example.com'] || []).length && p.sent.filter((m) => m.type === 'scan').length === scans + 1 && !p.sent.filter((m) => m.type === 'scan').pop().ignore.includes('Customer Support Hub'));
+  p.$('#tabSkip').click(); p.$('#list li.skip button').click(); await sleep(20);
+  t('207 ignored: clicking a row jumps to it on the page', p.sent.some((m) => m.type === 'focus' && m.id === 30));
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
