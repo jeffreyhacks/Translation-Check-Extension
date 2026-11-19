@@ -96,6 +96,15 @@ function renderChips() {
   }
   if (result.live) box.append(chip('', 'Live', 'Updating as the page changes', 'live'));
   if (src.status === 'used') box.append(chip(ICON.link, `Source: ${src.lang && src.lang !== 'x-default' ? nameOf(src.lang.split('-')[0]) : 'default'}`, 'Compared with the source-language version of this page'));
+  if (stats.acceptedN) { // untranslated text you OK'd: listed under Ignored, but still not translated, so it keeps the score below 100%
+    const one = stats.acceptedN === 1;
+    const c = chip('', `${stats.acceptedN} accepted untranslated`, `${one ? 'This untranslated text was' : `These ${stats.acceptedN} untranslated texts were`} accepted with OK or Ignore. ${one ? 'It is' : 'They are'} listed in the Ignored tab and still count as not translated in the score. Click to see ${one ? 'it' : 'them'}.`, 'accepted');
+    c.setAttribute('role', 'button'); c.tabIndex = 0;
+    const open = () => { view = 'skip'; cursor = -1; occAt.clear(); render(); };
+    c.addEventListener('click', open);
+    c.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+    box.append(c);
+  }
   if (stats.ignoredN) box.append(chip(ICON.skip, `${stats.ignoredN} skipped`, `${stats.ignoredN} numbers, times, codes, names and language names skipped`));
   if (stats.nameN) box.append(chip(ICON.user, `${stats.nameN} ${stats.nameN === 1 ? 'name' : 'names'}`, 'People, places and brands read the same in every language, so they were left alone'));
   if (stats.assumedN) box.append(chip('', `${stats.assumedN} assumed`, 'Unclear short strings assumed translated because the rest of the page is'));

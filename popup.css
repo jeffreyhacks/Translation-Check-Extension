@@ -79,6 +79,8 @@ button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visi
 .chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:var(--panel);color:var(--muted);font-size:11px}
 .chip svg{width:11px;height:11px}
 .chip.live::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 var(--ok);animation:pulse 2s infinite}
+.chip.accepted{cursor:pointer;color:var(--ink);box-shadow:inset 0 0 0 1px var(--bad)}
+.chip.accepted:hover,.chip.accepted:focus-visible{background:var(--line)}
 @keyframes pulse{70%{box-shadow:0 0 0 5px transparent}}
 @media (prefers-reduced-motion:reduce){.chip.live::before{animation:none}.ring .arc{transition:none}}
 

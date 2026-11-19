@@ -145,7 +145,7 @@ export async function analyzePdf({ pdfjs, data, params, send, onProgress = () =>
   issues.sort((a, b) => order[a.verdict] - order[b.verdict] || b.len - a.len);
   const judged = stats.ok + stats.bad;
   return {
-    kind: 'pdf', lang, requested: p.lang, mode: p.mode, pageLang: metaLang, stats, score: judged ? Math.round((judged ? stats.ok / judged : 0) * 100) : null,
+    kind: 'pdf', lang, requested: p.lang, mode: p.mode, pageLang: metaLang, stats, score: judged ? (stats.bad && stats.ok / judged >= 0.995 ? 99 : Math.round((stats.ok / judged) * 100)) : null, // 100% only with nothing untranslated
     issues: issues.slice(0, 300), allIssues: issues, truncated: Math.max(0, issues.length - 300), source: { status: 'pdf', pages }, models, live: false,
   };
 }

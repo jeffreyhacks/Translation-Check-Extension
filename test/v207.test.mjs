@@ -104,5 +104,22 @@ const point = async (h, text) => {
   t('setting switched off again: the open card closes and no new one appears', !card(h.w.document) && !(await point(h, 'Hire Flow')));
 }
 
+// Bug: 99% with 0 untranslated. OK'd English still counts (above); the result now says how much, so the panel can show why.
+{
+  const r = await scanWith({ ignore: ['Customer Support Hub', 'Inventory Management'] });
+  t('accepted untranslated: counted in stats.acceptedN', r.stats.acceptedN === 2 && !base.stats.acceptedN, JSON.stringify({ base: base.stats.acceptedN, r: r.stats.acceptedN }));
+  const all = r.issues.filter((i) => i.verdict === 'bad').map((i) => i.text);
+  const z = await scanWith({ ignore: ['Customer Support Hub', 'Inventory Management', ...all] });
+  t('accepted untranslated: 0 untranslated left, yet the score is below 100% and the panel can say why', z.stats.badN === 0 && z.score < 100 && z.stats.acceptedN > 0, JSON.stringify({ score: z.score, badN: z.stats.badN, acceptedN: z.stats.acceptedN }));
+}
+{
+  // a tiny bit of English on a long German page rounds to 100%: it must show 99%, since something is still not translated
+  const long = '<html lang="de"><body>' + Array.from({ length: 80 }, (_, i) => `<p>Die Mitarbeiter haben heute die neuen Berichte für das Quartal ${i} sorgfältig geprüft und anschließend an die Abteilungsleitung weitergegeben.</p>`).join('') + '<p>Save changes</p></body></html>';
+  const r = await loadNew(long, { url: 'https://example.de/x' }).call({ ...opts, unsure: true });
+  t('score: never 100% while something is untranslated', r.stats.badN === 1 && r.score === 99, JSON.stringify({ score: r.score, badN: r.stats.badN }));
+  const clean = await loadNew(long.replace('<p>Save changes</p>', ''), { url: 'https://example.de/x' }).call(opts);
+  t('score: 100% when nothing is untranslated', clean.stats.badN === 0 && clean.score === 100, JSON.stringify({ score: clean.score, badN: clean.stats.badN }));
+}
+
 console.log(`\n2.0.7: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

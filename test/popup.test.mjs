@@ -444,5 +444,19 @@ const G = {
   p.$('#tabSkip').click(); p.$('#list li.skip button').click(); await sleep(20);
   t('207 ignored: clicking a row jumps to it on the page', p.sent.some((m) => m.type === 'focus' && m.id === 30));
 }
+{
+  // Bug: 99% with 0 untranslated. Untranslated text you accepted is named next to the score, and the chip opens the Ignored tab.
+  const R = { ...RESULT, score: 99, stats: { ...RESULT.stats, badN: 0, unsureN: 0, acceptedN: 1 }, issues: [],
+    ignored: [{ id: 40, verdict: 'skip', kind: 'text', text: 'Customer Support Hub', reason: 'Ignored by you', byUser: true, count: 1, occ: [{ id: 40 }] }] };
+  const p = await boot('popup.html', 'https://shop.example.com/x', { result: R });
+  p.$('#scan').click(); await sleep(60);
+  const c = p.$('#chips .chip.accepted');
+  t('accepted chip: 99% with 0 untranslated says why', p.$('#score').textContent === '99%' && p.$('#nBad').textContent === '0' && c && /1 accepted untranslated/.test(c.textContent) && /still count as not translated/.test(c.title), chipsText(p));
+  c.click(); await sleep(20);
+  t('accepted chip: click opens the Ignored tab', p.$('#tabSkip').getAttribute('aria-selected') === 'true' && /Customer Support Hub/.test(p.$('#list').textContent));
+  const q = await boot('popup.html', 'https://shop.example.com/x', { result: { ...RESULT, score: 100, stats: { ...RESULT.stats, badN: 0 } } });
+  q.$('#scan').click(); await sleep(60);
+  t('accepted chip: not shown when nothing was accepted', !q.$('#chips .chip.accepted'));
+}
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
