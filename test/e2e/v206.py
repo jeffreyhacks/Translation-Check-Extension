@@ -218,6 +218,34 @@ with sync_playwright() as p:
     pop.click(f'#list li:nth-child({idx + 1}) .mark-btn'); time.sleep(0.4); wait_idle(pop)   # Unmark
     pop.click('#tabUnsure'); time.sleep(0.2)
     t('mark: Unmark puts it back under Unclear', any(r.startswith('Truecost') for r in rows(pop)), rows(pop))
+    # ---- Tooltips hidden until hover are checked too (every ⓘ, whether or not it is open), with the element they belong to
+    T = B + '/fr-tooltips.html'
+    pg.goto(T); pg.bring_to_front(); pg.mouse.move(0, 0)
+    pop.evaluate("u => { window.__T = u; }", T); set_lang(pop, 'fr')
+    pop.evaluate("() => { for (const id of ['attrs']) { const c = document.getElementById(id); if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change')); } } }")
+    pop.click('#tabBad'); pop.click('#scan'); time.sleep(1); wait_idle(pop); pop.click('#tabBad'); time.sleep(0.2)
+    sn = snippets(pop); rw = rows(pop)
+    want = ['These counts use live evaluations', 'Practice sessions are counted separately', 'Skill Progress follows the same rule', 'Badges are awarded after every', 'Invite your colleagues to join the team']
+    t('tooltips: every closed English tooltip is listed as untranslated (hidden, invisible, role=tooltip, aria-describedby, data-tooltip)', all(any(x in y for y in sn) for x in want), sn)
+    t('tooltips: their rows say they are tooltips shown on hover', sum('tooltip (shown on hover)' in r for r in rw) >= 4, rw)
+    t('tooltips: a French tooltip is not listed', not any('calculée chaque nuit' in y for y in sn))
+    t('tooltips: hidden text that is not a tooltip (closed panel, template) is not checked', not any(('closed' in y) or ('Template content' in y) for y in sn), sn)
+    idx = next(i for i, r in enumerate(rw) if 'These counts use live evaluations' in r)
+    pop.click(f'#list li:nth-child({idx + 1}) > button'); time.sleep(0.4)
+    t('tooltips: clicking a closed tooltip marks what it belongs to', pg.evaluate("() => !!document.querySelector('#g1[data-tc2-focus]')"))
+    pg.bring_to_front(); pg.hover('#g1 button'); time.sleep(0.3)
+    HLT = "t => { for (const [k, h] of CSS.highlights) if (/-bad$/.test(k)) for (const r of h) if (r.toString().startsWith(t)) return true; return false; }"
+    t('tooltips: when the tooltip opens it is highlighted', pg.evaluate(HLT, 'These counts use live evaluations') and pg.is_visible('#g1 .tip'))
+    pg.mouse.move(0, 0)
+    sn = snippets(pop); rw = rows(pop)
+    t('radix tooltips: English tooltips that exist only while open are listed', all(any(x in y for y in sn) for x in ['These counts use live evaluations that include skill scores.', 'Only assessments count toward this number']), sn)
+    t('radix tooltips: the French one is not listed', not any('Votre position sur le classement' in y for y in sn), sn)
+    t('radix tooltips: accordion and menu buttons are never opened', pg.evaluate("() => !window.__opened.includes('acc') && !window.__opened.includes('menu') && ['rx1','rx2','rx3'].every(id => window.__opened.includes(id))"), pg.evaluate("() => window.__opened"))
+    t('radix tooltips: every tooltip is closed again afterwards', pg.evaluate("() => new Promise(r => setTimeout(() => r(!document.querySelector('[data-radix-popper-content-wrapper]') && [...document.querySelectorAll('.rx')].every(b => b.dataset.state === 'closed')), 400))"))
+    pg.bring_to_front(); pg.hover('#rx3'); time.sleep(1.5); pg.mouse.move(0, 0); time.sleep(1.2); pop.bring_to_front()
+    sn2 = snippets(pop)
+    t('radix tooltips: still listed after hovering one open and closed again, and not counted twice', any('Only assessments count' in y for y in sn2) and not any('×2' in r and 'Only assessments count' in r for r in rows(pop)), (sn2, rows(pop)))
+    pop.screenshot(path=str(SHOTS/'v206-tooltips.png'))
     # ---- Live updates: new text is checked within a second, also while a clock on the page ticks every 0.4 s
     L = B + '/de-live.html'
     pg.goto(L); pg.bring_to_front()

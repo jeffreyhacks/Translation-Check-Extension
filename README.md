@@ -122,6 +122,19 @@ every copy gets the same verdict. A single unknown capitalised word ("Wisight", 
 column or set of cards as other titles. Native phrases ("Persona standard") and words the target language also uses ("Status", "Export")
 are not held.
 
+### Tooltips
+Tooltip text is checked whether or not the tooltip is open:
+- **Tooltips that exist only while open** (Radix / shadcn/ui and libraries built the same way): during a check, each tooltip button is
+  focused for a moment, as a keyboard user would, its text is read and focus goes back. The text is listed as the button's tooltip, so it
+  stays listed after the tooltip closes, and an open tooltip is not counted twice.
+- **Tooltips hidden until hover** (a `role="tooltip"` box, the target of `aria-describedby`, `hidden group-hover:block` or `invisible`
+  boxes): their text is checked while hidden and highlighted as soon as the tooltip opens. Clicking the row outlines what the tooltip
+  belongs to. Hidden text that is not a tooltip (a closed tab, a template) is not checked.
+- **Tooltip attributes**: `title`, `data-tooltip`, `data-tip`, `data-tippy-content` and Bootstrap's original-title, with *Placeholders &
+  tooltips* on.
+
+Buttons that open menus, accordions or dialogs (`aria-expanded`, `aria-haspopup`, `aria-controls`) and form fields are never focused.
+
 ### Names
 People, places and brands read the same in every language, so they are neither translated nor untranslated. They are counted
 (*5 names*), never highlighted, and don't affect the score. A name is recognised from built-in lists (about 13,000 given names and

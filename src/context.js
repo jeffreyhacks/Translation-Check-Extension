@@ -13,7 +13,8 @@ const ROLE_OF_TAG = {
 const ARIA_ROLE = { button: 'button', link: 'link', menuitem: 'menu item', menuitemcheckbox: 'menu item', menuitemradio: 'menu item', tab: 'tab',
   option: 'option', heading: 'heading', columnheader: 'table header', rowheader: 'table header', cell: 'table cell', gridcell: 'table cell',
   checkbox: 'checkbox', radio: 'radio button', switch: 'switch', tooltip: 'tooltip', alert: 'alert', status: 'status message', treeitem: 'tree item' };
-const ATTR_ROLE = { placeholder: 'placeholder', alt: 'image alt text', title: 'tooltip', 'aria-label': 'accessible label', value: 'button' };
+const ATTR_ROLE = { placeholder: 'placeholder', alt: 'image alt text', title: 'tooltip', 'aria-label': 'accessible label', value: 'button',
+  tooltip: 'tooltip', 'data-tooltip': 'tooltip', 'data-tip': 'tooltip', 'data-tippy-content': 'tooltip', 'data-bs-original-title': 'tooltip', 'data-original-title': 'tooltip' };
 const LANDMARK = { HEADER: 'Header', NAV: 'Navigation', MAIN: 'Main', FOOTER: 'Footer', ASIDE: 'Sidebar', FORM: 'Form', DIALOG: 'Dialog', TABLE: 'Table' };
 const ARIA_LANDMARK = { banner: 'Header', navigation: 'Navigation', main: 'Main', contentinfo: 'Footer', complementary: 'Sidebar', form: 'Form',
   dialog: 'Dialog', alertdialog: 'Dialog', search: 'Search', menu: 'Menu', menubar: 'Menu', tablist: 'Tabs', toolbar: 'Toolbar', grid: 'Table', table: 'Table' };
