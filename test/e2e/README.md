@@ -21,4 +21,5 @@ formats, and the CSV export (one line per row, no blank fields, every location).
 underlines (pixel-checked), the hover card and its decision buttons, and the popup following a decision made on the page.
 `site/hi-projects.html` – the reported Hindi "Project Management" page (no Playwright script; used by `test/v207.test.mjs`): Hindi words
 judged rather than set aside as codes, no *Wrong target?* banner for English project names, *Confirmed warnings only*, the "hi" language code.
+`snapshots.py` – the Report's pictures: one per finding, cropped from real screenshots in a short window (so the page has to be scrolled), each finding boxed whole in its colour, nothing left unpainted, and every scrolled box put back where it was.
 `contrast.py` – every visible text in the popup (results, both tabs, settings) meets WCAG AA contrast in the light and the dark theme.

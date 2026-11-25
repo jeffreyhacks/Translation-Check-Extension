@@ -1,4 +1,4 @@
-# Translation Check 2.0.7
+# Translation Check 2.0.8
 
 A Chrome extension for localization QA. It checks whether a web page, or a PDF open in the browser, is fully in the language you expect,
 and highlights the text that isn't: leftover English on a German page, Danish on a Dutch page, a translation key such as
@@ -96,7 +96,10 @@ learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
   separated by ` | `, one per copy in both *context* and *all locations*. Selectors are full paths from the nearest id (`#root > …`). For
   text you marked as untranslated, *reason* keeps the models' own reading too (*Marked untranslated by you; models: …*). Text alone in a table
   cell has the rest of its row as surrounding text, and its context names the column (*Table › column “Status”*).
-- **Report**: the same as a standalone HTML page to share.
+- **Report**: the same as a standalone HTML page to share, with a picture of each finding (*On the page*): cropped from a screenshot of
+  the page and boxed in its colour (red for untranslated, orange for unclear), with the rows around it for context. The page is scrolled to
+  each finding in turn and put back where it was; Chrome allows two screenshots a second, so pictures are taken for the first 40 findings.
+  A finding that isn't visible (hidden, or in a closed menu or tab) says so instead. No pictures for PDFs.
 - **Ignore & marked lists** (Settings): export and import as JSON, including learned rules and marked texts, to share them with your team.
 
 ## Settings

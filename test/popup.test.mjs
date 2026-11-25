@@ -31,7 +31,8 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
     i18n: { getUILanguage: () => 'en-US' },
     storage: { local: { get: async () => store, set: async (o) => Object.assign(store, o) }, onChanged: { addListener: (f) => (storageL = f) } },
     tabs: { query: async () => [{ id: 5, url: tabUrl }], update: async (id, o) => updates.push([id, o]),
-      sendMessage: async (id, m) => { sent.push(m); const R = o.result || RESULT; return m.type === 'scan' ? R : m.type === 'status' ? { result: null } : m.type === 'export' ? (o.export || { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: R.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) }) : { ok: true }; },
+      sendMessage: async (id, m) => { sent.push(m); const R = o.result || RESULT; return m.type === 'scan' ? R : m.type === 'status' ? { result: null } : m.type === 'export' ? (o.export || { url: tabUrl, title: 'Shop', lang: 'es', generated: 'now', issues: R.issues.map((i) => ({ ...i, selector: 'main > p:nth-of-type(2)' })) }) : m.type === 'tc-snap' ? (o.snap ? o.snap(m) : { ok: false, why: 'hidden' }) : { ok: true }; },
+      get: async (id) => ({ id, windowId: 9 }), captureVisibleTab: async (win, opt) => { shots.push([win, opt]); if (o.shotFails) throw new Error('Either the \'<all_urls>\' or \'activeTab\' permission is required.'); return 'data:image/png;base64,AAAA'; },
       onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
     scripting: { executeScript: async () => {}, registerContentScripts: async (a) => reg.push(...a), unregisterContentScripts: async () => {} },
     permissions: { request: (q) => { perms.push(q); return o.hold ? new Promise(() => {}) : Promise.resolve(permAnswer); }, remove: async (q) => { removed.push(q); return true; }, contains: async () => contains },
@@ -69,6 +70,7 @@ async function boot(file = 'popup.html', tabUrl = 'https://shop.example.com/x', 
   if (scanBtn) { const orig = scanBtn.click.bind(scanBtn); scanBtn.click = () => { orig(); permAtClick = perms.length; }; } // perms requested synchronously in the click
   return { get permAtClick() { return permAtClick; }, get fetchesBeforeGrant() { return fetchesBeforeGrant; }, fetches: () => fetchN, w, d: w.document, store, sent, reg, downloads, updates, clip, perms, removed, pdfCalls, runtimeSent, denyPerms: () => (permAnswer = false), failFetch: () => (fetchOk = false), msg: (m, s) => msgL(m, s), storageChanged: (ch) => storageL && storageL(ch, 'local'), $: (s) => w.document.querySelector(s) };
 }
+const shots = [];
 const readBlob = (w, blob, as = 'text') => new Promise((res) => { const r = new w.FileReader(); r.onload = () => res(r.result); if (as === 'text') r.readAsText(blob); else r.readAsArrayBuffer(blob); });
 const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.textContent).join(' | ');
 
@@ -131,9 +133,13 @@ const chipsText = (p) => [...p.d.querySelectorAll('#chips .chip')].map((c) => c.
   t('popup: CSV has a UTF-8 BOM so Excel reads accents', bytes && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF);
   t('popup: CSV has selector, broken-text rows and model agreement', csv && csv.startsWith('"type"') && /main > p:nth-of-type\(2\)/.test(csv) && /"Broken text"/.test(csv) && /2\/3 models \(confirmed\)/.test(csv), csv && csv.slice(0, 200));
   p.downloads.length = 0;
-  p.$('#expHtml').click(); await sleep(50);
+  const before = p.sent.length;
+  p.$('#expHtml').click(); await sleep(80);
   const html = await readBlob(p.w, p.downloads.find((d) => d instanceof p.w.Blob));
   t('popup: HTML report escapes page text', !/<img src=x/.test(html) && /&lt;img src=x/.test(html));
+  const snaps = p.sent.slice(before).filter((m) => m.type === 'tc-snap');
+  t('report pictures: one per finding (not for ignored rows), then the page is scrolled back', snaps.length === RESULT.issues.filter((i) => i.verdict !== 'skip').length && p.sent.slice(before).some((m) => m.type === 'tc-snap-done'), JSON.stringify(snaps));
+  t('report pictures: a column "On the page", and a finding not visible on the page says so', /<th>On the page<\/th>/.test(html) && /Not visible on the page/.test(html));
   p.$('#auto').click(); await sleep(50);
   t('popup: auto-check asks for this site only, with an origin the manifest lists as optional (https://host/*, never "*://")', p.perms.length === 1 && p.perms[0].origins.length === 1 && p.perms[0].origins[0] === 'https://shop.example.com/*' && p.store.autoSites.includes('shop.example.com'), JSON.stringify(p.perms));
   t('popup: auto-check asks the background worker to finish the setup (the popup itself does not register scripts)', p.runtimeSent.some((m) => m.type === 'tc-sync-auto') && p.reg.length === 0);
@@ -443,6 +449,17 @@ const G = {
   t('207 restore: off the ignore list, and the page is checked again', !(p.store.ignore.sites['shop.example.com'] || []).length && p.sent.filter((m) => m.type === 'scan').length === scans + 1 && !p.sent.filter((m) => m.type === 'scan').pop().ignore.includes('Customer Support Hub'));
   p.$('#tabSkip').click(); p.$('#list li.skip button').click(); await sleep(20);
   t('207 ignored: clicking a row jumps to it on the page', p.sent.some((m) => m.type === 'focus' && m.id === 30));
+}
+{
+  // report pictures: a screenshot is taken for each finding that is on screen; a refused screenshot still gives the report, with a note
+  const p = await boot('popup.html', 'https://shop.example.com/x', { shotFails: true, snap: () => ({ ok: true, rect: { x: 10, y: 10, w: 50, h: 12 }, vw: 800, vh: 600, dpr: 1 }) });
+  p.$('#scan').click(); await sleep(60);
+  shots.length = 0;
+  p.$('#expHtml').click(); await sleep(900);
+  const html = await readBlob(p.w, p.downloads.find((d) => d instanceof p.w.Blob));
+  t('report pictures: the screenshot is of the checked tab’s window', shots.length === 1 && shots[0][0] === 9 && shots[0][1].format === 'png', JSON.stringify(shots));
+  t('report pictures: when Chrome refuses the screenshot, the report still downloads and says how to get pictures', /Pictures stopped/.test(html) && /toolbar button/.test(html) && p.sent.some((m) => m.type === 'tc-snap-done'));
+  t('report pictures: the Report button works again afterwards', !p.$('#expHtml').disabled);
 }
 {
   // Bug: 99% with 0 untranslated. Untranslated text you accepted is named next to the score, and the chip opens the Ignored tab.

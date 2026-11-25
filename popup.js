@@ -21,6 +21,7 @@ const ICON = {
   user: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-4 3-6 7-6s7 2 7 6"/></svg>',
   check: '<svg class="check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>',
 };
+const CHEV = { left: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>', right: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>' };
 
 let tabId = null, tabUrl = '', host = '', isPdf = false, result = null, view = 'bad', cursor = -1;
 let ign = { global: [], sites: {} }, marked = { global: [], sites: {} }, autoSites = [], mem = L ? L.emptyMemory() : null, occAt = new Map(), lastLearned = [];
@@ -147,7 +148,7 @@ function render() {
     + (stats.acceptedN ? ', except untranslated text you accepted, which still counts as not translated.' : '.');
   const arc = $('#arc');
   arc.setAttribute('stroke-dasharray', `${score ?? 0} 100`);
-  arc.style.stroke = score == null ? 'var(--track)' : score >= 90 ? 'var(--ok)' : score >= 60 ? '#e0a100' : 'var(--bad)';
+  arc.style.stroke = score == null ? 'var(--track)' : score >= 90 ? 'var(--ok)' : score >= 60 ? 'var(--warn)' : 'var(--bad)';
   $('#nOk').textContent = stats.okN;
   $('#nBad').textContent = stats.badN;
   $('#nUnsure').textContent = stats.unsureN;
@@ -187,13 +188,13 @@ function render() {
   $('#pos').textContent = `${cursor + 1} / ${rows.length}`;
   $('#prev').disabled = $('#next').disabled = !rows.length;
   if (!rows.length) {
-    list.append(el('li', 'empty', { bad: 'Nothing untranslated 🎉', unsure: 'Nothing unclear', bug: 'No broken text', fmt: 'No format hints', skip: 'Nothing ignored' }[view]));
+    list.append(el('li', 'empty', { bad: 'Nothing untranslated', unsure: 'Nothing unclear', bug: 'No broken text', fmt: 'No format hints', skip: 'Nothing ignored' }[view]));
     return;
   }
   rows.forEach((i, idx) => {
     const li = el('li', i.verdict + (idx === cursor ? ' current' : ''));
     const b = el('button');
-    b.append(el('span', 'snippet', i.text)); // page text is always inserted as text, never HTML
+    const sn = el('span', 'snippet'); sn.append(el('span', 'hl', i.text)); b.append(sn); // page text is always inserted as text, never HTML; .hl marks it like the page does
     // where it is: the copy currently shown, e.g. "button · Navigation › “Settings”"
     const occ = i.occ || [], at = Math.min(occAt.get(i.id) || 0, Math.max(occ.length - 1, 0)), o = occ[at];
     const whereTxt = (o && o.where) || (at === 0 && i.context && [i.context.kind, i.context.path].filter(Boolean).join(' · ')) || '';
@@ -229,8 +230,8 @@ function render() {
       li.classList.add('has-occ');
       const nav = el('div', 'occnav');
       const go = (d) => { occAt.set(i.id, (at + d + occ.length) % occ.length); focusRow(i); render(); };
-      const prev = el('button', 'icon sm occ-prev', '‹'); prev.title = 'Previous place with this text'; prev.setAttribute('aria-label', prev.title); prev.addEventListener('click', () => go(-1));
-      const next = el('button', 'icon sm occ-next', '›'); next.title = 'Next place with this text'; next.setAttribute('aria-label', next.title); next.addEventListener('click', () => go(1));
+      const prev = el('button', 'icon sm occ-prev'); prev.innerHTML = CHEV.left; prev.title = 'Previous place with this text'; prev.setAttribute('aria-label', prev.title); prev.addEventListener('click', () => go(-1));
+      const next = el('button', 'icon sm occ-next'); next.innerHTML = CHEV.right; next.title = 'Next place with this text'; next.setAttribute('aria-label', next.title); next.addEventListener('click', () => go(1));
       nav.append(prev, el('span', 'occpos', `Copy ${at + 1} of ${occ.length}`), next);
       li.append(nav);
     }
@@ -470,7 +471,7 @@ function renderLearned() {
   if (!L || !mem) { box.hidden = true; return; }
   $('#learn').checked = mem.on;
   const rules = mem.rules.filter((r) => r.scope === '*' || r.scope === host);
-  if (!rules.length) { box.append(el('li', 'empty', mem.on ? 'Nothing learned for this site yet.' : 'Learning is off.')); return; }
+  if (!rules.length) { box.append(el('li', 'empty', mem.on ? 'Nothing learned for this site yet' : 'Learning is off')); return; }
   for (const r of rules) {
     const li = el('li');
     li.append(el('span', '', L.describeRule(r, host)));
@@ -562,18 +563,79 @@ $('#expCsv').onclick = async () => {
     download('translation-issues.csv', 'text/csv', '\ufeff' + [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n'));
   } catch (e) { setStatus(e.message, true); }
 };
+// ---------- Pictures in the report: each finding cropped from a screenshot of the page, with the text boxed in its colour ----------
+// Chrome allows two screenshots a second, so a long list is capped; the page is scrolled back to where it was afterwards.
+const SNAP_MAX = 40, SNAP_GAP = 550, SNAP_PAD = { x: 90, y: 50 }, SNAP_MIN_W = 440, SNAP_OUT_W = 760;
+const SNAP_COLOR = { bad: '#d7263d', unsure: '#f08a24', bug: '#7b2cbf', fmt: '#0f9d8a' };
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const snapId = (i) => (i.occ && i.occ[0] ? i.occ[0].id : i.id);
+async function cropShot(dataUrl, at, color) {
+  const img = await createImageBitmap(await (await fetch(dataUrl)).blob());
+  const k = img.width / at.vw; // screenshot pixels per CSS pixel (screen scaling and page zoom included)
+  const r = at.rect;
+  let w = Math.max(r.w + 2 * SNAP_PAD.x, SNAP_MIN_W), h = r.h + 2 * SNAP_PAD.y;
+  let x = r.x + r.w / 2 - w / 2, y = r.y - SNAP_PAD.y;
+  w = Math.min(w, at.vw); h = Math.min(h, at.vh);
+  x = Math.max(0, Math.min(x, at.vw - w)); y = Math.max(0, Math.min(y, at.vh - h));
+  const kh = img.height / at.vh; // (the same, unless the screenshot is missing a bar at the bottom)
+  if (kh < k) { h = Math.min(h, img.height / k); y = Math.max(0, Math.min(y, img.height / k - h)); }
+  const out = Math.min(1, SNAP_OUT_W / (w * k)) * k; // output pixels per CSS pixel
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * out); c.height = Math.round(h * out);
+  const g = c.getContext('2d');
+  g.drawImage(img, x * k, y * k, w * k, h * k, 0, 0, c.width, c.height);
+  const bx = (r.x - x - 4) * out, by = (r.y - y - 3) * out, bw = (r.w + 8) * out, bh = (r.h + 6) * out;
+  g.fillStyle = color + '22'; g.fillRect(bx, by, bw, bh);
+  g.strokeStyle = color; g.lineWidth = Math.max(2, 2.5 * out / k * Math.min(k, 2)); g.strokeRect(bx, by, bw, bh);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+async function takePictures(issues) {
+  const pics = new Map(), want = issues.filter((i) => SNAP_COLOR[i.verdict]);
+  const todo = want.slice(0, SNAP_MAX);
+  let note = want.length > todo.length ? `Pictures of the first ${todo.length} of ${want.length} findings.` : '';
+  if (!todo.length || result?.kind === 'pdf') return { pics, note: result?.kind === 'pdf' ? 'No pictures for PDF documents.' : note };
+  let windowId;
+  try { windowId = (await api.tabs.get(tabId)).windowId; } catch {}
+  let last = 0;
+  try {
+    for (const [n, i] of todo.entries()) {
+      setStatus(`Taking pictures for the report… ${n + 1} / ${todo.length}`);
+      let at = null;
+      try { at = await send({ type: 'tc-snap', id: snapId(i) }); } catch {}
+      if (!at || !at.ok) { pics.set(i, { why: at?.why === 'hidden' ? 'Not visible on the page (hidden, or in a closed menu or tab)' : 'No longer on the page' }); continue; }
+      await wait(Math.max(150, SNAP_GAP - (Date.now() - last))); // let the page paint after scrolling, and stay under Chrome's limit
+      last = Date.now();
+      const shot = await api.tabs.captureVisibleTab(windowId, { format: 'png' });
+      pics.set(i, { src: await cropShot(shot, at, SNAP_COLOR[i.verdict]), tooltip: at.tooltip });
+    }
+  } catch (e) {
+    note = `Pictures stopped: ${e.message || e}. Open the extension from its toolbar button on the page, then download the report again.`;
+  } finally {
+    try { await send({ type: 'tc-snap-done' }); } catch {}
+  }
+  return { pics, note };
+}
+
 $('#expHtml').onclick = async () => {
+  const btn = $('#expHtml');
+  if (btn.disabled) return;
+  btn.disabled = true;
   try {
     const d = await getExport();
+    const { pics, note } = await takePictures(d.issues);
     const loc = (i) => (i.occurrences && i.occurrences.length
       ? `<ol>${i.occurrences.map((o) => `<li>${esc(o.where || where(i))}${o.before || o.after ? `<br><i>${esc(o.before)} [${esc(i.text)}] ${esc(o.after)}</i>` : ''}${o.selector ? '<br><code>' + esc(o.selector) + '</code>' : ''}</li>`).join('')}</ol>`
       : `${esc(where(i))}${i.selector ? '<br><code>' + esc(i.selector) + '</code>' : ''}`);
-    const rows = d.issues.map((i) => `<tr><td>${esc(LABEL[i.verdict])}</td><td>${esc(i.text)}${(i.count || 1) > 1 ? ` <b>×${i.count}</b>` : ''}</td><td>${esc(reasonOf(i))}${i.detected ? ' (' + esc(i.detected) + ')' : ''} ${esc(agree(i))}</td><td>${loc(i)}</td></tr>`).join('');
+    const pic = (i) => { const p = pics.get(i); if (!p) return ''; if (!p.src) return `<i>${esc(p.why)}</i>`;
+      return `<a href="${p.src}" target="_blank"><img src="${p.src}" alt="${esc(i.text.slice(0, 80))} on the page"></a>${p.tooltip ? '<br><i>Tooltip text: the box shows what it belongs to</i>' : ''}`; };
+    const shots = [...pics.values()].filter((p) => p.src).length;
+    const rows = d.issues.map((i) => `<tr><td>${esc(LABEL[i.verdict])}</td><td>${esc(i.text)}${(i.count || 1) > 1 ? ` <b>×${i.count}</b>` : ''}</td><td class="pic">${pic(i)}</td><td>${esc(reasonOf(i))}${i.detected ? ' (' + esc(i.detected) + ')' : ''} ${esc(agree(i))}</td><td>${loc(i)}</td></tr>`).join('');
     download('translation-report.html', 'text/html', `<!doctype html><meta charset="utf-8"><title>Translation report</title>
-<style>body{font:14px system-ui;margin:24px;color:#14213d}table{border-collapse:collapse;width:100%}td,th{border:1px solid #dde3ec;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f1f4f9}code{font-size:12px}ol{margin:0;padding-left:18px}i{color:#566176}</style>
-<h1>Translation report</h1><p><a href="${esc(d.url)}">${esc(d.title || d.url)}</a><br>Target language: <b>${esc(d.lang)}</b> · ${esc(d.generated)} · ${d.issues.length} issue(s)</p>
-<table><tr><th>Type</th><th>Text</th><th>Why</th><th>Where</th></tr>${rows}</table>`);
-  } catch (e) { setStatus(e.message, true); }
+<style>body{font:14px system-ui;margin:24px;color:#14213d}table{border-collapse:collapse;width:100%}td,th{border:1px solid #dde3ec;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f1f4f9}code{font-size:12px}ol{margin:0;padding-left:18px}i{color:#566176}td.pic{width:390px}td.pic img{display:block;max-width:380px;height:auto;border:1px solid #dde3ec;border-radius:4px}</style>
+<h1>Translation report</h1><p><a href="${esc(d.url)}">${esc(d.title || d.url)}</a><br>Target language: <b>${esc(d.lang)}</b> · ${esc(d.generated)} · ${d.issues.length} issue(s)${note ? `<br><i>${esc(note)}</i>` : ''}</p>
+<table><tr><th>Type</th><th>Text</th><th>On the page</th><th>Why</th><th>Where</th></tr>${rows}</table>`);
+    setStatus(shots ? `Report downloaded with ${shots} ${shots === 1 ? 'picture' : 'pictures'}.` : 'Report downloaded.');
+  } catch (e) { setStatus(e.message, true); } finally { btn.disabled = false; }
 };
 
 // ---------- Auto-check a site (optional permission requested only for that site) ----------
