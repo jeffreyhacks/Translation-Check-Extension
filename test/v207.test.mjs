@@ -141,5 +141,16 @@ const point = async (h, text) => {
   t('language codes: Title-case words ("Hi", "No") are still judged, other codes are not set aside', !words.ignored.some((i) => /Language code/.test(i.reason)), JSON.stringify(words.ignored));
 }
 
+// report pictures: the page script brings a finding into view for the popup's screenshot, then scrolls back
+{
+  const h = loadNew(HTML, { url: `https://${HOST}/admin/projects` });
+  const r = await h.call(opts);
+  const id = r.issues.find((i) => i.verdict === 'bad' || i.verdict === 'unsure')?.occ?.[0]?.id;
+  const snap = await h.call({ type: 'tc-snap', id });
+  t('snapshot: a finding with no size on screen is reported as not visible (no picture)', snap && snap.ok === false && snap.why === 'hidden', JSON.stringify(snap));
+  t('snapshot: an unknown finding is reported as gone', (await h.call({ type: 'tc-snap', id: 999999 })).why === 'gone');
+  t('snapshot: done answers', (await h.call({ type: 'tc-snap-done' })).ok === true);
+}
+
 console.log(`\n2.0.7: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -809,6 +809,48 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     return parts.join(' > ');
   }
 
+  // ---------- Pictures for the report: bring one finding into view and say where it is on the screen ----------
+  // The popup takes the screenshot (only it can) and crops it around the rectangle given here, in CSS pixels of the top window.
+  let snapScroll = null; // where the window and every scrolled box were before the pictures (first value wins), to put them back
+  function rememberScroll(el) {
+    for (let e = el; e; e = e.parentElement || e.getRootNode?.().host || e.ownerDocument?.defaultView?.frameElement) {
+      if (!snapScroll.boxes.has(e) && (e.scrollHeight > e.clientHeight || e.scrollWidth > e.clientWidth)) snapScroll.boxes.set(e, [e.scrollLeft, e.scrollTop]);
+      const w = e.ownerDocument?.defaultView;
+      if (w && !snapScroll.wins.has(w)) snapScroll.wins.set(w, [w.scrollX, w.scrollY]);
+    }
+  }
+  function snapPrep(id) {
+    const t = targets.get(id);
+    if (!t) return { ok: false, why: 'gone' };
+    const n = nodeOf(t);
+    if (!n || !n.isConnected) return { ok: false, why: 'gone' };
+    if (!snapScroll) snapScroll = { boxes: new Map(), wins: new Map([[window, [window.scrollX, window.scrollY]]]) };
+    unfocus(); hideCard(true);
+    const el = t.kind === 'text' ? n.parentElement || n.parentNode?.host : n;
+    const tipHost = t.tip && !(t.tip.checkVisibility ? t.tip.checkVisibility({ visibilityProperty: true }) : t.tip.getClientRects().length) && t.tip.parentElement; // a closed tooltip: picture what it belongs to
+    const box = tipHost || el;
+    if (!box) return { ok: false, why: 'hidden' };
+    rememberScroll(box);
+    box.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    let r;
+    if (!tipHost && t.kind === 'text') { try { const range = n.ownerDocument.createRange(); range.selectNodeContents(n); r = range.getBoundingClientRect(); } catch (e) { /* no layout */ } }
+    if (!r || !r.width || !r.height) r = box.getBoundingClientRect();
+    if (!r.width || !r.height) return { ok: false, why: 'hidden' };
+    let x = r.left, y = r.top;
+    for (let w = winOf(n); w && w !== window && w.frameElement; w = w.parent) { const f = w.frameElement.getBoundingClientRect(); x += f.left + w.frameElement.clientLeft; y += f.top + w.frameElement.clientTop; } // same-origin frames
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (x + r.width <= 0 || y + r.height <= 0 || x >= vw || y >= vh) return { ok: false, why: 'hidden' };
+    return { ok: true, rect: { x, y, w: r.width, h: r.height }, vw, vh, dpr: window.devicePixelRatio || 1, tooltip: !!tipHost };
+  }
+  function snapDone() {
+    if (snapScroll) {
+      for (const [e, [x, y]] of snapScroll.boxes) { try { e.scrollLeft = x; e.scrollTop = y; } catch (err) { /* gone */ } }
+      for (const [w, [x, y]] of snapScroll.wins) { try { w.scrollTo({ left: x, top: y, behavior: 'instant' }); } catch (err) { /* frame gone, or no layout */ } }
+      snapScroll = null;
+    }
+    return { ok: true };
+  }
+
   function exportData() {
     if (!state) return { issues: [] };
     return {
@@ -884,11 +926,12 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const root = host.attachShadow({ mode: 'open' });
     const color = i.verdict === 'bad' ? '#d7263d' : '#e8590c';
     root.innerHTML = `<style>
-      .c{font:12.5px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#14213d;background:#fff;border:1px solid #dde3ec;border-left:4px solid ${color};border-radius:8px;
-         box-shadow:0 6px 24px rgba(20,33,61,.18);padding:8px 10px;max-width:300px}
-      .h{font-weight:600;color:${color};margin-bottom:2px}.r{margin:2px 0}.m{color:#566176;font-size:11.5px}
-      .b{display:flex;gap:6px;margin-top:7px}button{font:inherit;font-size:12px;border:1px solid #c9d1de;background:#f6f8fb;color:#14213d;border-radius:6px;padding:3px 9px;cursor:pointer}
-      button:hover{background:#eaeef5}button.p{background:${color};border-color:${color};color:#fff}button.ok{margin-left:auto}</style>
+      .c{font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;color:#14213d;background:#fff;border:1px solid rgba(20,33,61,.12);border-radius:10px;
+         box-shadow:0 8px 24px rgba(0,0,0,.12);padding:12px;max-width:300px}
+      .h{display:flex;align-items:center;gap:8px;font-weight:500;margin-bottom:4px}.h::before{content:"";flex:none;width:8px;height:8px;border-radius:50%;background:${color}}
+      .r{margin:0}.m{color:#566176;font-size:12px;margin-top:4px}.m:empty{display:none}
+      .b{display:flex;gap:8px;margin-top:12px}button{font:inherit;font-size:12px;font-weight:500;height:28px;border:1px solid rgba(20,33,61,.14);background:#fff;color:#14213d;border-radius:6px;padding:0 10px;cursor:pointer;transition:background-color .15s}
+      button:hover{background:#f3f5f9}button:focus-visible{outline:2px solid #3b6df0;outline-offset:2px}button.p{background:#14213d;border-color:#14213d;color:#fff}button.p:hover{background:#24335a}button.ok{margin-left:auto}</style>
       <div class="c" role="dialog" aria-label="Translation Check"><div class="h"></div><div class="r"></div><div class="m"></div><div class="b"></div></div>`;
     root.querySelector('.h').textContent = i.marked ? 'Not translated (marked by you)' : i.verdict === 'bad' ? 'Not translated' : 'Unclear';
     root.querySelector('.r').textContent = i.reason || 'Too short or ambiguous to judge';
@@ -1078,6 +1121,14 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       case 'focus': reply({ ok: focusIssue(msg.id) }); break;
       case 'status': reply({ result: last }); break;
       case 'export': reply(exportData()); break;
+      case 'tc-snap': { // answered once the page has painted after scrolling, so the screenshot shows it
+        const r = snapPrep(msg.id);
+        const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16));
+        if (!r.ok) { reply(r); break; }
+        frame(() => frame(() => setTimeout(() => reply(r), 30)));
+        return true;
+      }
+      case 'tc-snap-done': reply(snapDone()); break;
       case 'tc-hovercard': if (state) { state.p.hoverCard = !!msg.on; state.params = { ...state.params, hoverCard: !!msg.on }; if (!msg.on) hideCard(true); } reply({ ok: true }); break;
       default: break;
     }
