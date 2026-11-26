@@ -3,7 +3,7 @@
 import { EN_FN } from './lexicon.js';
 import { dateRe } from './dates.js';
 
-const UNITS = 'ms|secs?|s|mins?|m|hrs?|h|d|w|y|b|kb|mb|gb|tb|kib|mib|gib|k|km|cm|mm|kg|g|mg|ml|l|fps|hz|khz|mhz|ghz|px|pt|em|rem|x|dpi|bpm|rpm|mbps|kbps|gbps|kw|kwh|mah|mp|v|°c|°f|°|%';
+export const UNITS = 'ms|secs?|s|mins?|m|hrs?|h|d|w|y|b|kb|mb|gb|tb|kib|mib|gib|k|km|cm|mm|kg|g|mg|ml|l|fps|hz|khz|mhz|ghz|px|pt|em|rem|x|dpi|bpm|rpm|mbps|kbps|gbps|kw|kwh|mah|mp|v|°c|°f|°|%';
 const PATTERNS = [
   /\b[a-z][a-z0-9+.-]*:\/\/\S+/gi,                       // URLs
   /\bwww\.\S+/gi,

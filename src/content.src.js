@@ -1,12 +1,13 @@
 // Translation Check — page-side scanner (injected on demand via activeTab, or automatically on opted-in sites).
 // Language judgement happens in the background worker (one shared model); this script only collects,
 // masks, highlights and reports.
-import { mask, compileTerms, TECH_TERMS } from './mask.js';
+import { mask, compileTerms, TECH_TERMS, UNITS } from './mask.js';
 import { detectBug, formatHints, dateStyle } from './rules.js';
 import { describe, contextLine, slotOf, kindOf } from './context.js';
 import { isStatusValue, isStatusSlot } from './status.js';
-import { matcher } from './learn.js';
+import { matcher, forLang } from './learn.js';
 import { nonLatinTarget, latinOnly } from './scripts.js';
+import { variants, calques } from './wording.js';
 
 (() => {
   if (window.__tcLoaded) return;
@@ -96,7 +97,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
           if (tip && tip.getAttribute('role') === 'tooltip') text = clean(tip.textContent || '');
         } catch (err) { /* a button that can't take focus */ }
         try { e.blur(); } catch (err) { /* ignore */ }
-        if (text && collectable(text, p)) out.push({ kind: 'attr', attr: 'tooltip', text, el: e });
+        // (the same text already read from one of its attributes, a title or data-tooltip, is the same tooltip: listed once)
+        if (text && collectable(text, p) && !attrSeen(e, text)) { out.push({ kind: 'attr', attr: 'tooltip', text, el: e }); seeAttr(e, text); }
       }
     } finally {
       try { if (prev && prev !== doc.body && prev.isConnected && prev.focus) prev.focus({ preventScroll: true }); } catch (err) { /* ignore */ }
@@ -106,6 +108,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
   }
   const TIP_ATTRS = ['data-tooltip', 'data-tip', 'data-tippy-content', 'data-bs-original-title', 'data-original-title'];
+  let attrTexts = new WeakMap(); // element -> texts already collected from its attributes and tooltips (reset with each check)
+  const attrSeen = (el, t) => !!attrTexts.get(el)?.has(t);
+  const seeAttr = (el, t) => { let set = attrTexts.get(el); if (!set) attrTexts.set(el, (set = new Set())); set.add(t); };
   const collectable = (t, p) => t.length >= 2 && !URLISH.test(t) && (/\p{L}/u.test(t) || /[{%]/.test(t) || (p.hints ? /\d/ : /\d[/.:-]\d/).test(t)); // (dates and times are always checked)
   const blocked = (el) => !!(el.closest && (el.closest(NO_TRANSLATE) || el.closest(SKIP_SEL)));
 
@@ -138,6 +143,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       else { const box = tipBox(parent); if (box) out.push({ kind: 'text', text, node, tip: box }); }
     }
     if (p.attrs && root.querySelectorAll) {
+      // one text per element once: title="Start the tour" and data-tooltip="Start the tour" on the same button are one tooltip, not two copies
       const sel = '[placeholder],[alt],[title],[aria-label],input[type=submit],input[type=button],' + TIP_ATTRS.map((a) => `[${a}]`).join(',');
       for (const el of root.querySelectorAll(sel)) {
         if (out.length >= MAX_ITEMS) break;
@@ -145,7 +151,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
         for (const attr of ['placeholder', 'alt', 'title', 'aria-label', 'value', ...TIP_ATTRS]) {
           if (attr === 'value' && !/^(submit|button)$/.test(el.type || '')) continue;
           const text = clean(el.getAttribute(attr) || '');
-          if (collectable(text, p)) out.push({ kind: 'attr', attr, text, el });
+          if (collectable(text, p) && !attrSeen(el, text)) { out.push({ kind: 'attr', attr, text, el }); seeAttr(el, text); }
         }
       }
     }
@@ -162,6 +168,18 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       const v = document.querySelector(sel)?.content?.trim();
       if (v && v.length <= 40) t.add(v);
     }
+    // The product's name from the page title ("Arena — AI Role Play Platform"), but only when the logo says the same: a part of the title that is
+    // also the alt text of the logo or home link ("arena"). A title part alone could be the page's heading ("Paramètres — Arena"), which must
+    // still be checked.
+    try {
+      const all = (document.title || '').split(/\s+[—–|·-]\s+|:\s+/).map((x) => x.trim());
+      const parts = all.filter((x) => x.length >= 2 && x.length <= 30 && x.split(/\s+/).length <= 3);
+      if (all.length > 1) {
+        const logos = [...document.querySelectorAll('header img[alt], nav img[alt], a[href="/"] img[alt], img[class*="logo" i][alt], [class*="logo" i] img[alt], a[href="/"][aria-label]')]
+          .map((e) => clean(e.getAttribute('alt') || e.getAttribute('aria-label') || '').toLowerCase()).filter(Boolean);
+        for (const x of parts) if (logos.includes(x.toLowerCase())) t.add(x);
+      }
+    } catch (e) { /* no title */ }
     return [...t];
   }
 
@@ -170,9 +188,10 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const keep = [];
     let ign = 0;
     for (const it of raw) {
-      // learned from earlier Ignore clicks (codes, versions, a page slot such as `span.user-name`): skipped like ignored terms
-      // (kept as an Ignored item with its reason, so it is counted and exported instead of silently dropped)
-      if (!state.okSet.has(nk(it.text)) && state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host)) { state.learnedN++; it.base = { v: 'skip', reason: 'Ignored by a rule learned from your Ignore clicks' }; it.j = ''; it.len = 0; keep.push(it); continue; }
+      // Learned from earlier Ignore clicks (codes, versions, a page slot such as `span.user-name`). The language is checked first, always:
+      // the text is judged like any other, and the rule is applied afterwards (see finalize) only to text the models could not place.
+      // Text read as the page's language is simply translated; text read as another language stays a finding, whatever the rule says.
+      if (!state.okSet.has(nk(it.text))) { const r = state.learnedTerms.get(nk(it.text)) || state.learnMatch(it.text, it.el || it.node.parentElement || it.node.parentNode?.host); if (r) it.learned = r; }
       // a language menu's own code ("hi", "HI", "IN HI"): the target's or the page's language code, alone on a button, link or menu item
       if (langCodeLabel(it, p)) { it.base = { v: 'skip', reason: 'Language code (language menu)' }; it.j = ''; it.len = 0; keep.push(it); continue; }
       if (p.bugs) {
@@ -181,6 +200,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       }
       // dates and times are checked on every scan; number and price formats only with Format hints on
       { const f = formatHints(it.text, p.lang, { numbers: p.hints, dates: true }); if (f.length) it.fmt = f; }
+      { const w = calques(it.text, p.lang); if (w.length) it.wording = w; } // word-for-word translations of English terms (see wording.js)
       // Text you OK'd (Ignore in the popup, OK on the page) as a whole is still judged, so it can be listed as "OK'd by you" with what the models
       // read, and so English you accepted still counts against the score: OK never turns untranslated text into translated text.
       // (Ignored terms inside longer text are still masked there, as before.)
@@ -215,12 +235,16 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     return !!el?.closest?.('button, a, option, select, summary, [role=button], [role=menuitem], [role=option], [role=tab], [aria-haspopup]');
   }
 
+  // A number with its unit or a usual abbreviation ("15 pt.", "30 min", "2 h", "5 GB"): normal in every language, not a code.
+  const UNIT_ONLY = new RegExp(`^[~≈±+−-]?\\d[\\d\\s.,]*\\s?(${UNITS}|pts|points?)(\\.)?$`, 'iu');
   // Why text was set aside before judging (the masks only remove; this names what removed it).
   function skipReason(text, p, accepted) {
     const hit = (re) => { if (!re) return false; re.lastIndex = 0; return re.test(text); };
     if (!accepted && hit(state.userRe)) return 'On your ignore list';
     if (hit(state.techRe)) return 'Technical term (allowed in every language)';
     if (hit(state.siteRe)) return 'Name of this site or app';
+    const unit = text.match(UNIT_ONLY);
+    if (unit) return `Number with a unit or abbreviation (“${unit[1]}${unit[2] || ''}”)`;
     if (/\p{L}/u.test(text) && /\d/.test(text)) return 'Code, number or ID (letters mixed with digits)';
     return 'Code, abbreviation or symbol';
   }
@@ -393,6 +417,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       it.titleWord = latinPage && !it.hold && v.v === 'unsure' && n === 1 && /^\p{Lu}/u.test(it.j) && !v.enVocab && !v.shared && ov >= 1 && leanEn;
       if (it.hold && v.v === 'unsure' && (!v.reason || it.title)) v = { ...v, reason: ov >= 2 && leanEn ? 'Name or title? Two language models read it as English' : 'Name or title? Could be untranslated' };
       // every unclear text says why: no model could place it, a phrase written like a title, or models that disagree
+      // (a word of both languages, by the target language's own word list: "Notifications", "Actions" on a French page)
+      if (v.v === 'unsure' && !v.reason && v.shared && latinPage) v = { ...v, reason: `Spelled the same in English and ${langName(state.p.lang)}` };
       if (v.v === 'unsure' && !v.reason) {
         const vs = v.votes, none = !vs || ['tinyld', 'cld3', 'franc'].every((k) => vs[k] !== 'other' && vs[k] !== 'target');
         v = { ...v, reason: none ? 'Detection failed: no language model could place it' : latinPage && n >= 2 && titleCase(it.j) ? 'Name or title? Could be untranslated' : 'The language models disagree' };
@@ -457,6 +483,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
   }
 
+  const langName = (l) => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(l) || l; } catch (e) { return l; } };
   const titleCase = (t) => { const ws = t.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []; return ws.length > 0 && ws.filter((w) => /^\p{Lu}/u.test(w)).length >= Math.ceil(ws.length * 0.6); };
 
   // Items of the same kind in the same list are judged consistently: a table column, or a repeated slot (same element and class). When most of
@@ -505,6 +532,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
   // Interface controls whose text is a label, never a name or title.
   const CONTROL = new Set(['tab', 'button', 'menu item', 'option', 'table header']);
 
+  const ruleWords = (r) => (r.type === 'slot' ? `text in ${r.value}` : r.type === 'shape' ? `${r.value}s` : `“${r.value}”`);
+
   // Page-level tendency: if the page is clearly translated, unclear short strings almost certainly are too.
   function finalize() {
     let okC = 0, badC = 0;
@@ -516,6 +545,16 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       // "Shows only warnings that at least two models back": an unconfirmed warning is hidden from the lists (it used to move to Unclear,
       // where it was still shown) and is never assumed translated; it stays counted, under Ignored with its reason, so nothing is dropped silently
       for (const it of state.items) if (it.base.v === 'bad' && it.base.votes && !it.base.confirmed) it.base = { v: 'skip', reason: 'Not confirmed by a second model (Confirmed warnings only is on)', votes: it.base.votes, unconfirmed: true };
+    }
+    // Rules learned from Ignore clicks set aside only what the models could not place (unclear, or a possible name). Never text read as the
+    // target language (that is translated and not listed at all) and never text read as another language (that stays a finding).
+    state.learnedN = 0;
+    for (const it of state.items) {
+      if (it.base?.learned) { state.learnedN++; continue; } // set aside on an earlier pass (a live re-check runs this again)
+      if (!it.learned || !it.base || (it.base.v !== 'unsure' && it.base.v !== 'name')) continue;
+      state.learnedN++;
+      const was = it.base.v;
+      it.base = { v: 'skip', reason: `Ignored by a rule learned from your Ignore clicks (${ruleWords(it.learned)}; the models read it as ${was === 'name' ? 'a name' : 'unclear'})`, learned: true, was, votes: it.base.votes, detected: it.base.detected };
     }
     for (const it of state.items) {
       // (Latin letters on a page in another script are never assumed translated)
@@ -541,7 +580,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       if (it.v.assumed) state.assumedN--;
       const was = it.v.assumed ? 'unsure' : it.v.v;
       const what = { bad: 'not translated', unsure: 'unclear', ok: 'translated', name: 'a name', skip: 'a code or ID' }[was] || was;
-      it.v = { v: 'skip', reason: `Ignored by you (the models read it as ${what}${it.v.reason && !it.v.assumed && was !== 'skip' ? ': ' + it.v.reason : ''})`, accepted: true, was, votes: it.v.votes, detected: it.v.detected };
+      const why = was === 'skip' && it.v.reason ? `Ignored by you (already set aside: ${it.v.reason})` : `Ignored by you (the models read it as ${what}${it.v.reason && !it.v.assumed && was !== 'skip' ? ': ' + it.v.reason : ''})`;
+      it.v = { v: 'skip', reason: why, accepted: true, was, votes: it.v.votes, detected: it.v.detected };
     }
   }
 
@@ -624,7 +664,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       targets.set(myId, it);
       // byUser: on your ignore list (Ignore in the popup or on the page), so it can be restored; was: its tab before you ignored it
       const byUser = !!it.v?.accepted || /^On your ignore list/.test(reason || '');
-      ignored.push({ id: myId, verdict: 'skip', kind: it.kind, attr: it.attr, reason, text: it.text.slice(0, 300), len: it.text.length, votes: it.v?.votes, byUser, was: it.v?.was, detected: it.v?.detected });
+      ignored.push({ id: myId, verdict: 'skip', kind: it.kind, attr: it.attr, reason, text: it.text.slice(0, 300), len: it.text.length, votes: it.v?.votes, byUser, was: it.v?.was, detected: it.v?.detected, unconfirmed: !!it.v?.unconfirmed, learned: !!it.v?.learned });
     };
     const add = (it, verdict, reason, detected, extra) => {
       const myId = ++id;
@@ -649,6 +689,9 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     const numeric = [...styles].filter((x) => x.startsWith('numeric'));
     const mixedDates = numeric.length > 1 || (styles.has('month name, month first') && styles.has('month name, day first'))
       ? `Dates on this page are written in different formats (${[...styles].join('; ')})` : '';
+    // the same label written two ways on this page ("Manuel de l'utilisateur" and "Manuel utilisateur"), among text read as the page's language
+    const okTexts = state.items.filter((it) => nodeOf(it).isConnected && (it.v.v === 'ok' || it.v.v === 'unsure')).map((it) => it.text);
+    const twoWays = variants(okTexts, p.lang);
     for (const it of state.items) {
       if (!nodeOf(it).isConnected) continue;
       const v = it.v;
@@ -657,7 +700,10 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       if (v.v === 'name') addIgnored(it, v.kind === 'id' ? 'User name or ID' : v.reason || 'Looks like a name'); // names are counted, never highlighted
       else if (v.v === 'skip') addIgnored(it, v.reason);
       else if (v.v !== 'ok') add(it, v.v, v.reason, v.detected || v.lean || v.was?.detected || v.other);
-      const fmt = [...(it.fmt || []), ...(mixedDates && dateStyle(it.text) ? [mixedDates] : [])];
+      const inLang = v.v === 'ok' || v.v === 'unsure';
+      const fmt = [...(it.fmt || []), ...(mixedDates && dateStyle(it.text) ? [mixedDates] : []),
+        ...(inLang && it.wording ? it.wording : []),
+        ...(inLang && twoWays.has(it.text) ? [`Wording: written two ways on this page, “${it.text}” and “${twoWays.get(it.text)}”`] : [])];
       for (const f of fmt) { stats.fmtN++; add(it, 'fmt', f); }
     }
     for (const win of marks.keys()) {
@@ -851,8 +897,22 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     return { ok: true };
   }
 
-  function exportData() {
+  // Before exporting, the page is brought up to date: changes still waiting for the live re-check are checked now, and so is text that
+  // changed since it was checked (an app that swapped in its translations after the check). Then the context of every row is read again,
+  // in the same moment, so the text, the text around it and the pictures that follow describe the same state of the page.
+  async function exportData() {
     if (!state) return { issues: [] };
+    const stale = state.items.filter((it) => it.kind === 'text' && it.node.isConnected && clean(it.node.nodeValue || '') !== it.text);
+    if (stale.length || dirty.size || timer) {
+      clearTimeout(timer); timer = 0; firstChange = 0;
+      for (const it of stale) dirty.add(it.node.parentElement || it.node.parentNode?.host || null);
+      for (let k = 0; busy && k < 100; k++) await new Promise((r) => setTimeout(r, 50));
+      await refresh();
+      for (let k = 0; busy && k < 100; k++) await new Promise((r) => setTimeout(r, 50));
+      if (!state) return { issues: [] };
+    }
+    ctxCache = new WeakMap(); blockCache = new WeakMap();
+    for (const g of [...state.allIssues, ...(state.allIgnored || [])]) for (const o of g.occ) delete o.where;
     return {
       url: location.href, title: document.title, lang: state.p.lang, generated: new Date().toISOString(), source: state.sourceInfo,
       issues: [...state.allIssues, ...(state.allIgnored || [])].map((g) => {
@@ -1036,7 +1096,8 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       }
       const roots = [...dirty].filter((e) => e && e.isConnected);
       dirty.clear();
-      visCache = new WeakMap();
+      // the text around an item and its sentence are read again: a cached context from before the change would describe the page as it was
+      visCache = new WeakMap(); ctxCache = new WeakMap(); blockCache = new WeakMap(); attrTexts = new WeakMap();
       describedIds = new Set([...document.querySelectorAll('[aria-describedby]')].flatMap((e) => e.getAttribute('aria-describedby').split(/\s+/)).filter(Boolean));
       state.items = state.items.filter((it) => nodeOf(it).isConnected && !roots.some((r) => r.contains(nodeOf(it))));
       const raw = [];
@@ -1054,6 +1115,37 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     }
   }
 
+  // Terms and rules for a check in p.lang. Rules learned from Ignore clicks are tied to the language they were learned for. A learned term
+  // (the same text ignored on two sites) is applied to the whole text after judging, like the other learned rules, never masked beforehand.
+  function termState(p) {
+    const learned = p.learned.filter((r) => r && forLang(r, p.lang));
+    return {
+      learnedTerms: new Map(learned.filter((r) => r.type === 'term').map((r) => [nk(r.value), r])),
+      termRe: compileTerms([...p.ignore, ...siteTerms(), ...TECH_TERMS]), learnMatch: matcher(learned, p.lang),
+      userRe: compileTerms(p.ignore), baseRe: compileTerms([...siteTerms(), ...TECH_TERMS]), techRe: compileTerms(TECH_TERMS), siteRe: compileTerms(siteTerms()),
+    };
+  }
+
+  // Wait until the page has stopped changing before reading it: an app that is still rendering or translating (text swapped in after the first
+  // paint) would otherwise be read half in one state and half in the other. Waits for SETTLE_QUIET ms without a change, at most SETTLE_MAX ms.
+  // A page that is not changing is read at once (after a short look, SETTLE_PROBE ms, when this copy of the script has only just started).
+  const SETTLE_QUIET = 400, SETTLE_MAX = 3000, SETTLE_PROBE = 120;
+  let lastPageChange = 0;
+  const bornAt = Date.now();
+  try {
+    const ours = (r) => r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every((n) => n.nodeType === 1 && n.hasAttribute?.(A_STYLE));
+    new MutationObserver((records) => { if (!sweeping && records.some((r) => !ours(r))) lastPageChange = Date.now(); })
+      .observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  } catch (e) { /* no observer */ }
+  async function settlePage(settle) {
+    if (settle === false) return;
+    const start = Date.now();
+    if (start - bornAt < SETTLE_PROBE) await new Promise((r) => setTimeout(r, SETTLE_PROBE - (start - bornAt)));
+    while (lastPageChange && Date.now() - lastPageChange < SETTLE_QUIET && Date.now() - start < SETTLE_MAX) {
+      await new Promise((r) => setTimeout(r, Math.min(100, SETTLE_QUIET - (Date.now() - lastPageChange)) + 5));
+    }
+  }
+
   // ---------- Scan ----------
   async function scan(params) {
     if (!(window.CSS && CSS.highlights && window.Highlight)) return { error: 'This browser is too old for the highlight API (needs Chrome 105+).' };
@@ -1063,7 +1155,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
     if (lang === 'auto') lang = declared; // refined below from the page's own text (the declared language can be stale)
     const my = ++seq;
     clearAll();
-    visCache = new WeakMap(); blockCache = new WeakMap();
+    visCache = new WeakMap(); blockCache = new WeakMap(); attrTexts = new WeakMap();
     describedIds = new Set([...document.querySelectorAll('[aria-describedby]')].flatMap((e) => e.getAttribute('aria-describedby').split(/\s+/)).filter(Boolean));
     const p = {
       lang, requested: params.lang, mode: params.mode || 'balanced', attrs: !!params.attrs, unsure: !!params.unsure,
@@ -1074,17 +1166,18 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       marked: Array.isArray(params.marked) ? params.marked.filter((x) => typeof x === 'string') : [],
       hoverCard: params.hoverCard !== false, // the card on underlined text (Settings › On the page)
     };
-    const learnedTerms = p.learned.filter((r) => r.type === 'term').map((r) => r.value);
     state = { p, params, items: [], scope: { roots: new Set() }, ctx: null, ignoredN: 0, assumedN: 0, learnedN: 0, allIssues: [], source: null, sourceInfo: { status: p.source ? 'none' : 'off' },
-      termRe: compileTerms([...p.ignore, ...learnedTerms, ...siteTerms(), ...TECH_TERMS]), learnMatch: matcher(p.learned), auto: null,
-      userRe: compileTerms([...p.ignore, ...learnedTerms]), okSet: new Set(p.ignore.map(nk)), baseRe: compileTerms([...learnedTerms, ...siteTerms(), ...TECH_TERMS]), techRe: compileTerms(TECH_TERMS), siteRe: compileTerms(siteTerms()) };
+      auto: null, okSet: new Set(p.ignore.map(nk)), ...termState(p) };
     try {
+      await settlePage(params.settle);
+      if (my !== seq || !state) return { error: 'A newer check replaced this one.' };
       const raw = [];
       await collectFrom(document.body, p, raw, state.scope);
       if (params.lang === 'auto') {
         state.auto = await pageLanguage(raw.map((it) => it.text), declared);
         p.lang = state.auto.lang;
         if (!p.lang) return { error: 'This page doesn’t declare its language (no lang attribute) and its text is too short to tell. Pick a language instead of “Page’s own language”.' };
+        Object.assign(state, termState(p)); // learned rules belong to a language: only now is it known
       }
       const srcP = p.source ? loadSource(p) : null;
       const { keep, ign } = prepare(raw, p, state.termRe);
@@ -1120,7 +1213,7 @@ import { nonLatinTarget, latinOnly } from './scripts.js';
       case 'clear': clearAll(); announce(false); reply({ ok: true }); break;
       case 'focus': reply({ ok: focusIssue(msg.id) }); break;
       case 'status': reply({ result: last }); break;
-      case 'export': reply(exportData()); break;
+      case 'export': exportData().then(reply, (e) => reply({ error: String(e), issues: [] })); return true;
       case 'tc-snap': { // answered once the page has painted after scrolling, so the screenshot shows it
         const r = snapPrep(msg.id);
         const frame = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16));

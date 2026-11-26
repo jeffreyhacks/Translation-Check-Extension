@@ -33,7 +33,11 @@ async function classify({ lang, texts = [], ctxTexts = [], htmlLang, related, ct
       let v = await engine.classify(texts[k], lang, c);
       const kind = v.v !== 'ok' && !SCRIPT.test(v.reason || '') && knownName(texts[k]); // a person, place or brand: not something to translate
       if (kind) { verdicts[k] = { v: 'name', reason: 'Looks like a name', kind }; continue; }
-      if (verify !== false) v = await verifier.verify(texts[k], lang, v, c.related, { shape: !CAPITALISES.has(lang) && nameShape(texts[k]), sources: c.sources || [] });
+      if (verify !== false && v.v === 'ok') {
+        // the engine's "fine" is checked by the other two models too (full phrases only); a confident dissent sends it to review
+        const r = await verifier.review(texts[k], lang, c.related, c.sources || []);
+        if (r) { if (knownName(texts[k])) { verdicts[k] = { v: 'name', reason: 'Looks like a name', kind: knownName(texts[k]) }; continue; } v = r; }
+      } else if (verify !== false) v = await verifier.verify(texts[k], lang, v, c.related, { shape: !CAPITALISES.has(lang) && nameShape(texts[k]), sources: c.sources || [] });
       v = guardShort(texts[k], v, lang, c.related);
       // On a page in another script, Latin text that merely looks like a name (models disagree, every word capitalised) is listed for a decision
       // ("Wisight Sytems Developer"), not silently counted as a name. Names from the built-in lists were already taken out above.

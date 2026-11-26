@@ -403,7 +403,7 @@ const G = {
   p.$('#expCsv').click(); await sleep(50);
   const csv = (await readBlob(p.w, p.downloads.find((d) => d.size))).replace(/^﻿/, '');
   const rows = csv.split('\r\n').slice(1);
-  t('projects csv: unclear rows are in the export with a reason', rows.some((r) => r.startsWith('"Can’t tell","Smart Service Analytics","Name or title')), rows.filter((r) => /Smart/.test(r)).join('\n'));
+  t('projects csv: unclear rows are in the export with a reason', rows.some((r) => r.startsWith('"Needs review","Smart Service Analytics","Name or title')), rows.filter((r) => /Smart/.test(r)).join('\n'));
   t('projects csv: ignored rows are in the export with a reason', rows.some((r) => r.startsWith('"Ignored","Wisight","Ignored by you (the models read it as unclear')) && rows.some((r) => /^"Ignored","\d\d\.\d\d\.2026","Date or time/.test(r)), rows.filter((r) => r.startsWith('"Ignored"')).slice(0, 3).join('\n'));
   // a decision made on the page (hover card) reaches this window through storage
   p.storageChanged({ marked: { newValue: { global: [], sites: { 'knowledge-harvestor.artisanscloud.com': ['Smart Service Analytics'] } } } });
@@ -488,6 +488,32 @@ const G = {
   const q = await boot('popup.html', 'https://shop.example.com/x', { result: { ...hiPage, stats: { ...hiPage.stats, ok: 100 } } });
   q.$('#scan').click(); await sleep(60);
   t('banner: shown when the other language outweighs the target', !q.$('#mismatch').hidden && /Mostly English \(71% of the text\) — the page’s own language/.test(q.$('#mismatchText').textContent), q.$('#mismatchText').textContent);
+}
+{
+  // 2.0.8 (reported: a report of 98 "Ignored" rows headed "98 issue(s)"): findings first, then "Needs review", then the skipped rows collapsed
+  const occ = (where, selector) => ({ where, selector, before: '', after: '' });
+  const issues = [
+    { id: 1, verdict: 'bad', kind: 'text', text: 'Transparent pricing and purity', detected: 'en', reason: 'Looks like English text', count: 1, occurrences: [occ('text · Main', 'main > span')] },
+    { id: 2, verdict: 'unsure', kind: 'text', text: 'Gezielte Informationsabfrage', reason: 'Needs review: two of the three models don’t read the target language', count: 1, occurrences: [occ('text · Main', 'main > span:nth-of-type(2)')] },
+    { id: 3, verdict: 'skip', kind: 'text', text: 'Thème sombre', reason: 'Not confirmed by a second model (Confirmed warnings only is on)', unconfirmed: true, count: 1, occurrences: [occ('text · Main', 'main > b')] },
+    { id: 4, verdict: 'fmt', kind: 'text', text: 'Identification des points de douleur', reason: 'Wording: “points de douleur” looks like a word-for-word translation of “pain points”', count: 1, occurrences: [occ('text · Main', 'main > i')] },
+    { id: 5, verdict: 'skip', kind: 'text', text: '15 pt.', reason: 'Number with a unit or abbreviation (“pt.”)', count: 10, occurrences: [occ('text · Main', 'main > em')] },
+    { id: 6, verdict: 'skip', kind: 'text', text: '20 pt.', reason: 'Number with a unit or abbreviation (“pt.”)', count: 15, occurrences: [occ('text · Main', 'main > em')] },
+    { id: 7, verdict: 'skip', kind: 'attr', attr: 'tooltip', text: 'Start the tour', reason: 'On your ignore list', count: 2, occurrences: [occ('tooltip · Header', 'header > button'), occ('tooltip · Header', 'header > button')] },
+  ];
+  const p = await boot('popup.html', 'https://shop.example.com/x', { export: { url: 'https://shop.example.com/x', title: 'Rubrics', lang: 'fr', generated: 'now', issues } });
+  p.$('#scan').click(); await sleep(60);
+  p.downloads.length = 0;
+  p.$('#expHtml').click(); await sleep(150);
+  const html = await readBlob(p.w, p.downloads.find((d) => d instanceof p.w.Blob));
+  t('208 report: the header counts findings, review and skipped apart (not "N issue(s)")', /1 finding · 2 to review · 1 hint · 3 skipped/.test(html) && !/issue\(s\)/.test(html), html.slice(0, 900));
+  const at = (re) => html.search(re);
+  t('208 report: findings first, then Needs review, then hints, then skipped', at(/<h2>Findings/) < at(/<h2>Needs review/) && at(/<h2>Needs review/) < at(/<h2>Format and wording hints/) && at(/<h2>Format and wording hints/) < at(/<details>/));
+  t('208 report: a warning hidden as unconfirmed is under Needs review, not Ignored', /<td>Needs review<\/td><td>Thème sombre/.test(html) && at(/Thème sombre/) < at(/<details>/));
+  t('208 report: skipped rows are collapsed, with a count per reason', /<details><summary>Skipped/.test(html) && /<li>Number with a unit or abbreviation: 2 \(25 on the page\)<\/li>/.test(html), html.slice(at(/<details>/), at(/<details>/) + 600));
+  const tip = html.slice(at(/Start the tour/));
+  t('208 report: the same place listed twice is shown once', (tip.slice(0, tip.indexOf('</tr>')).match(/<li>/g) || []).length === 1);
+  t('208 report: no pictures for skipped rows', !/<details>[\s\S]*<th>On the page<\/th>/.test(html));
 }
 console.log(`\npopup: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
