@@ -18,6 +18,14 @@ const letters = (t) => (t.match(/\p{L}/gu) || []).length;
 const wordsOf = (t) => (t.match(/\p{L}[\p{L}\p{M}'’-]*/gu) || []).length;
 const solid = (t) => letters(t) >= 20 && wordsOf(t) >= 3; // long enough for a model's own confidence to mean something
 const ABSTAIN = { vote: 'abstain' };
+// A confident dissent counts only when it names a language untranslated text could come from: English with English wording in it, or a language
+// the page itself contains elsewhere, on a phrase of four words or more. On short phrases CLD3 is "sure" of Catalan or Hungarian for plain French.
+function credible(l, text, lang, sources) {
+  if (!l) return false;
+  if (l === 'en') return lang !== 'en' && englishHits(text, lang).strong >= 1;
+  return wordsOf(text) >= 4 && sources.some((s) => kin(s, l));
+}
+const langLabel = (l) => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(l) || l; } catch (e) { return l; } };
 const hasAccent = (t) => /[\u00c0-\u024f]/.test(t); // letters English words (almost) never use: é ä ö ü ñ ç ø ł ş ...
 
 // franc speaks ISO 639-3; map to the 2-letter codes used everywhere else. Unmapped codes => the vote abstains.
@@ -203,6 +211,13 @@ export function createVerifier(cldFallback = async () => null) {
     const lead = agree && agree.lang;
     const hard = v.v === 'bad' && HARD.test(v.reason || '');
 
+    // Easier to raise a flag than to clear one: on a full phrase, one model that confidently reads another language is enough to stop
+    // "two models say target" from clearing it. It is not a warning either: it is listed as unclear, "Needs review", with who said what.
+    const dissent = isSolid && all.find((x) => x.vote === 'other' && (x.strong || x.sure) && !x.duel && credible(x.lang, text, lang, sources));
+    if (forTarget.length >= 2 && dissent && !englishWording && !hard) {
+      const who = ['tinyld', 'CLD3', 'franc'][all.indexOf(dissent)];
+      return { v: 'unsure', reason: `Needs review: ${who} confidently reads ${langLabel(dissent.lang)}, the other models read the target language`, votes, review: true, lean: dissent.lang, via: 'verify' };
+    }
     if (forTarget.length >= 2 && !englishWording && !blocked('target') && !hard) {
       return { v: 'ok', reason: 'Two language models read this as the target language', votes, confirmed: true, via: 'verify' };
     }
@@ -241,5 +256,34 @@ export function createVerifier(cldFallback = async () => null) {
     return { ...v, votes, ...(lean && !v.detected ? { lean } : {}) };
   }
 
-  return { verify, status: () => ({ ...status }) };
+  /**
+   * Second opinion on text the engine read as the target language. Without it, a phrase tinyld calls fine is never seen by the other two models.
+   * Only full phrases (solid text): on a word or two a detector's confidence means little. Returns null when CLD3 and franc have nothing
+   * confident against it, otherwise an unclear "Needs review" verdict (one confident dissent) or a warning (both confidently name the same language).
+   */
+  async function review(text, lang, related = true, sources = []) {
+    sources = sources.map(norm);
+    const eq = { target: groupOf(lang), related: related ? relatedOf(lang) : [] };
+    if (!solid(text)) {
+      // A short label of long words ("Gezielte Informationsabfrage"): tinyld only weighs it against the target and English, so a German label on
+      // a French page can come out "fine". When CLD3 and franc both, unprompted, name the same other language, it goes to review.
+      // (never when every word is a word of the target language by its word list: "Négociation et influence" stays French)
+      if (wordsOf(text) < 2 || letters(text) < 16 || sharedEntirely(text, lang)) return null;
+      const c = await cld3Vote(text, eq, false), f = francVote(text, eq, false);
+      if (c.vote !== 'other' || f.vote !== 'other') return null;
+      const named = kin(c.lang, f.lang) ? `both read ${langLabel(c.lang)}` : `CLD3 reads ${langLabel(c.lang)}, franc ${langLabel(f.lang)}`;
+      return { v: 'unsure', reason: `Needs review: two of the three models don’t read the target language (${named}); tinyld does`, votes: { tinyld: 'target', cld3: c.vote, franc: f.vote }, review: true, lean: kin(c.lang, f.lang) ? c.lang : undefined, via: 'verify' };
+    }
+    const c = await cld3Vote(text, eq, true), f = francVote(text, eq, true);
+    const votes = { tinyld: 'target', cld3: c.vote, franc: f.vote };
+    const sure = [['CLD3', c], ['franc', f]].filter(([, x]) => x.vote === 'other' && (x.strong || x.sure) && credible(x.lang, text, lang, sources));
+    if (!sure.length) return null;
+    if (sure.length === 2 && kin(c.lang, f.lang)) {
+      return { v: 'bad', detected: c.lang, reason: 'Two language models read this as another language', votes, confirmed: true, agree: { lang: c.lang, n: 2 }, via: 'verify' };
+    }
+    const [who, x] = sure[0];
+    return { v: 'unsure', reason: `Needs review: ${who} confidently reads ${langLabel(x.lang)}, tinyld reads the target language`, votes, review: true, lean: x.lang, via: 'verify' };
+  }
+
+  return { verify, review, status: () => ({ ...status }) };
 }

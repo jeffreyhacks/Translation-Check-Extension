@@ -188,7 +188,7 @@ function render() {
   $('#pos').textContent = `${cursor + 1} / ${rows.length}`;
   $('#prev').disabled = $('#next').disabled = !rows.length;
   if (!rows.length) {
-    list.append(el('li', 'empty', { bad: 'Nothing untranslated', unsure: 'Nothing unclear', bug: 'No broken text', fmt: 'No format hints', skip: 'Nothing ignored' }[view]));
+    list.append(el('li', 'empty', { bad: 'Nothing untranslated', unsure: 'Nothing unclear', bug: 'No broken text', fmt: 'No format or wording hints', skip: 'Nothing ignored' }[view]));
     return;
   }
   rows.forEach((i, idx) => {
@@ -445,7 +445,7 @@ async function addIgnore(term, issue) {
   drop(marked, term); // the latest decision wins
   // learning: remember what was ignored and where; three similar Ignores make a rule (see learn.js)
   if (L && mem && mem.on && issue) {
-    const r = L.record(mem, { text: term, host, slot: issue.slot || '' });
+    const r = L.record(mem, { text: term, host, slot: issue.slot || '', lang: result?.lang || '' }); // a rule belongs to the language that was checked
     mem = r.mem; lastLearned = r.learned;
     showLearned();
     renderLearned();
@@ -526,7 +526,9 @@ $('#impFile').addEventListener('change', async () => {
 // ---------- Export (CSV / HTML report) ----------
 const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const LABEL = { bad: 'Not translated', unsure: 'Can’t tell', bug: 'Broken text', fmt: 'Format hint', skip: 'Ignored' };
+const LABEL = { bad: 'Not translated', unsure: 'Needs review', bug: 'Broken text', fmt: 'Format or wording hint', skip: 'Ignored' };
+// A warning hidden by "Confirmed warnings only" is not a decision that the text is fine: it is listed as "Needs review", not as Ignored.
+const typeOf = (i) => (i.verdict === 'skip' && i.unconfirmed ? 'Needs review' : LABEL[i.verdict]);
 // One line per field: several locations are separated by " | ", never by a line break (a line break inside a field splits the row in text
 // editors and breaks some spreadsheet imports).
 const flat = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
@@ -558,7 +560,7 @@ $('#expCsv').onclick = async () => {
     const d = await getExport();
     // new columns go at the end, so existing spreadsheets and scripts that read the first eight keep working
     const head = ['type', 'text', 'reason', 'detected language', 'model agreement', 'where', 'selector', 'document', 'occurrences', 'context', 'surrounding text', 'all locations'];
-    const rows = d.issues.map((i) => [LABEL[i.verdict], flat(i.text), reasonOf(i), detectedOf(i), agree(i) || 'n/a', where(i), i.selector || 'n/a', d.url,
+    const rows = d.issues.map((i) => [typeOf(i), flat(i.text), reasonOf(i), detectedOf(i), agree(i) || 'n/a', where(i), i.selector || 'n/a', d.url,
       i.count || 1, contexts(i), nearText(i), places(i)]);
     download('translation-issues.csv', 'text/csv', '\ufeff' + [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n'));
   } catch (e) { setStatus(e.message, true); }
@@ -616,24 +618,52 @@ async function takePictures(issues) {
   return { pics, note };
 }
 
+// The report puts what needs work first: findings (untranslated and broken text), then what needs a person's decision ("Needs review": unclear
+// text, models that disagree, warnings hidden as unconfirmed), then format and wording hints, and last, collapsed, everything that was skipped
+// with its reason (names, codes, numbers with units, your ignore list…). Skipped text is not a problem, so the header counts it apart.
+const REPORT_CSS = `body{font:14px system-ui;margin:24px;color:#14213d}table{border-collapse:collapse;width:100%}td,th{border:1px solid #dde3ec;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f1f4f9}code{font-size:12px}ol{margin:0;padding-left:18px}i{color:#566176}td.pic{width:390px}td.pic img{display:block;max-width:380px;height:auto;border:1px solid #dde3ec;border-radius:4px}h2{margin:28px 0 8px;font-size:18px}h2 .n{color:#566176;font-weight:400}.sum{font-size:16px}.empty{color:#566176}details{margin-top:28px}summary{cursor:pointer;font-size:18px;font-weight:600}summary .n{color:#566176;font-weight:400}ul.why{margin:8px 0 12px;padding-left:20px}`;
+const sectionOf = (i) => (i.verdict === 'bad' || i.verdict === 'bug' ? 'find' : i.verdict === 'unsure' || (i.verdict === 'skip' && i.unconfirmed) ? 'review' : i.verdict === 'fmt' ? 'fmt' : 'skip');
+// the same place listed twice (one tooltip read from two attributes) is one place
+const uniqOcc = (i) => { const seen = new Set(); return (i.occurrences || []).filter((o) => { const k = [o.where, o.selector, o.before, o.after].join('\u0001'); if (seen.has(k)) return false; seen.add(k); return true; }); };
+// "Ignored by a rule learned from your Ignore clicks (text in span.x; …)" and "Code, number or ID (letters mixed with digits)" are grouped by
+// the part before the brackets, so the skipped summary is a short list of reasons
+const reasonKey = (i) => (reasonOf(i) || 'Skipped').replace(/\s*\(.*$/, '');
+
 $('#expHtml').onclick = async () => {
   const btn = $('#expHtml');
   if (btn.disabled) return;
   btn.disabled = true;
   try {
     const d = await getExport();
-    const { pics, note } = await takePictures(d.issues);
-    const loc = (i) => (i.occurrences && i.occurrences.length
-      ? `<ol>${i.occurrences.map((o) => `<li>${esc(o.where || where(i))}${o.before || o.after ? `<br><i>${esc(o.before)} [${esc(i.text)}] ${esc(o.after)}</i>` : ''}${o.selector ? '<br><code>' + esc(o.selector) + '</code>' : ''}</li>`).join('')}</ol>`
-      : `${esc(where(i))}${i.selector ? '<br><code>' + esc(i.selector) + '</code>' : ''}`);
+    const by = { find: [], review: [], fmt: [], skip: [] };
+    for (const i of d.issues) by[sectionOf(i)].push(i);
+    const { pics, note } = await takePictures([...by.find, ...by.review, ...by.fmt]);
+    const loc = (i) => { const occ = uniqOcc(i); return occ.length
+      ? `<ol>${occ.map((o) => `<li>${esc(o.where || where(i))}${o.before || o.after ? `<br><i>${esc(o.before)} [${esc(i.text)}] ${esc(o.after)}</i>` : ''}${o.selector ? '<br><code>' + esc(o.selector) + '</code>' : ''}</li>`).join('')}</ol>`
+      : `${esc(where(i))}${i.selector ? '<br><code>' + esc(i.selector) + '</code>' : ''}`; };
     const pic = (i) => { const p = pics.get(i); if (!p) return ''; if (!p.src) return `<i>${esc(p.why)}</i>`;
       return `<a href="${p.src}" target="_blank"><img src="${p.src}" alt="${esc(i.text.slice(0, 80))} on the page"></a>${p.tooltip ? '<br><i>Tooltip text: the box shows what it belongs to</i>' : ''}`; };
     const shots = [...pics.values()].filter((p) => p.src).length;
-    const rows = d.issues.map((i) => `<tr><td>${esc(LABEL[i.verdict])}</td><td>${esc(i.text)}${(i.count || 1) > 1 ? ` <b>×${i.count}</b>` : ''}</td><td class="pic">${pic(i)}</td><td>${esc(reasonOf(i))}${i.detected ? ' (' + esc(i.detected) + ')' : ''} ${esc(agree(i))}</td><td>${loc(i)}</td></tr>`).join('');
+    const count = (i) => ((i.count || 1) > 1 ? ` <b>×${i.count}</b>` : '');
+    const row = (i, withPic) => `<tr><td>${esc(typeOf(i))}</td><td>${esc(i.text)}${count(i)}</td>${withPic ? `<td class="pic">${pic(i)}</td>` : ''}<td>${esc(reasonOf(i))}${i.detected && i.verdict !== 'skip' ? ' (' + esc(i.detected) + ')' : ''} ${esc(agree(i))}</td><td>${loc(i)}</td></tr>`;
+    const table = (list, withPic) => `<table><tr><th>Type</th><th>Text</th>${withPic ? '<th>On the page</th>' : ''}<th>Why</th><th>Where</th></tr>${list.map((i) => row(i, withPic)).join('')}</table>`;
+    const section = (title, list, empty) => `<h2>${title} <span class="n">(${list.length})</span></h2>${list.length ? table(list, true) : `<p class="empty">${empty}</p>`}`;
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const occN = (list) => list.reduce((n, i) => n + (i.count || 1), 0);
+    const reasons = new Map();
+    for (const i of by.skip) { const k = reasonKey(i); const r = reasons.get(k) || { rows: 0, occ: 0 }; r.rows++; r.occ += i.count || 1; reasons.set(k, r); }
+    const skipped = by.skip.length ? `<details><summary>Skipped <span class="n">(${by.skip.length} ${by.skip.length === 1 ? 'text' : 'texts'}, ${occN(by.skip)} on the page): not problems, each with its reason</span></summary>
+<ul class="why">${[...reasons].sort((a, b) => b[1].rows - a[1].rows).map(([k, r]) => `<li>${esc(k)}: ${r.rows}${r.occ > r.rows ? ` (${r.occ} on the page)` : ''}</li>`).join('')}</ul>${table(by.skip, false)}</details>` : '';
+    const head = [plural(by.find.length, 'finding', 'findings'), `${by.review.length} to review`, ...(by.fmt.length ? [plural(by.fmt.length, 'hint', 'hints')] : []), `${by.skip.length} skipped`].join(' · ');
+    const picNote = note || (!by.find.length && !by.review.length && !by.fmt.length ? 'No pictures: nothing was found to show.' : '');
     download('translation-report.html', 'text/html', `<!doctype html><meta charset="utf-8"><title>Translation report</title>
-<style>body{font:14px system-ui;margin:24px;color:#14213d}table{border-collapse:collapse;width:100%}td,th{border:1px solid #dde3ec;padding:6px 8px;text-align:left;vertical-align:top}th{background:#f1f4f9}code{font-size:12px}ol{margin:0;padding-left:18px}i{color:#566176}td.pic{width:390px}td.pic img{display:block;max-width:380px;height:auto;border:1px solid #dde3ec;border-radius:4px}</style>
-<h1>Translation report</h1><p><a href="${esc(d.url)}">${esc(d.title || d.url)}</a><br>Target language: <b>${esc(d.lang)}</b> · ${esc(d.generated)} · ${d.issues.length} issue(s)${note ? `<br><i>${esc(note)}</i>` : ''}</p>
-<table><tr><th>Type</th><th>Text</th><th>On the page</th><th>Why</th><th>Where</th></tr>${rows}</table>`);
+<style>${REPORT_CSS}</style>
+<h1>Translation report</h1><p><a href="${esc(d.url)}">${esc(d.title || d.url)}</a><br>Target language: <b>${esc(d.lang)}</b> · ${esc(d.generated)}</p>
+<p class="sum"><b>${esc(head)}</b>${picNote ? `<br><i>${esc(picNote)}</i>` : ''}</p>
+${section('Findings', by.find, 'No untranslated or broken text found.')}
+${section('Needs review', by.review, 'Nothing to review.')}
+${by.fmt.length ? section('Format and wording hints', by.fmt, '') : ''}
+${skipped}`);
     setStatus(shots ? `Report downloaded with ${shots} ${shots === 1 ? 'picture' : 'pictures'}.` : 'Report downloaded.');
   } catch (e) { setStatus(e.message, true); } finally { btn.disabled = false; }
 };

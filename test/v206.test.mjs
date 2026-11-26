@@ -51,8 +51,9 @@ const SHOP = page(`
   const base = await scan(loadNew(html));
   const sl = await scan(loadNew(html), { learned: [{ type: 'slot', scope: 'www.acmecloud.io', value: 'span.user-name' }, { type: 'shape', scope: '*', value: 'code' }, { type: 'term', scope: '*', value: 'Save changes' }] });
   const has = (r, re) => r.issues.some((i) => re.test(i.text));
-  t('learned: slot rule skips text in that slot', !has(sl, /Whitfield|Thornton/) && sl.stats.learnedN >= 2, JSON.stringify({ base: base.issues.map((i) => i.text), sl: sl.issues.map((i) => i.text), n: sl.stats.learnedN }));
-  t('learned: term rule works like an ignored term', has(base, /Save changes/) && !has(sl, /Save changes/));
+  t('learned: slot rule skips text in that slot', !has(sl, /Whitfield|Thornton/) && sl.stats.learnedN >= 1 && sl.ignored.some((i) => /Whitfield/.test(i.text) && /learned/.test(i.reason)), JSON.stringify({ base: base.issues.map((i) => i.text), sl: sl.issues.map((i) => i.text), n: sl.stats.learnedN }));
+  // 2.0.8: the language is checked first; a learned rule never hides text the models read as another language ("Save changes" on a Spanish page)
+  t('learned: a term rule never hides text read as another language', has(base, /Save changes/) && has(sl, /Save changes/));
   const texts = (r) => new Set(r.issues.map((i) => i.text));
   t('learned: nothing else changes (no new warnings; only the skipped names and term are gone)', [...texts(sl)].every((x) => texts(base).has(x)) && sl.stats.badN <= base.stats.badN && sl.stats.okN >= base.stats.okN - 2, JSON.stringify([base.stats, sl.stats]));
   const none = await scan(loadNew(html), { learned: [] });

@@ -26,7 +26,7 @@ The popup shows a score (the share of the page's text that is in the target lang
 | **Unclear** | Text the models can't judge with confidence (very short text, names and titles, words shared by several languages), always with a reason. An orange wavy underline on the page. |
 | **Broken** | Leaked translation keys (`checkout.button.save`), unfilled placeholders (`{{name}}`, `%s`, `{0}`), `undefined`/`NaN`, `[object Object]` and missing-translation markers. Shown only when something is found. |
 | **Ignored** | Names, codes and IDs, technical terms, dates and times, and what you ignored, each with its reason. What you ignored is listed first and has **Restore**, which takes it off the ignore list and puts it back in the tab it came from. Shown when something was ignored. |
-| **Format** | Date and time formats that don't fit the language (always checked), and number and price formats (with *Format hints* on). Shown when something is found. |
+| **Format** | Date and time formats that don't fit the language (always checked), number and price formats (with *Format hints* on), and wording hints: the same label written two ways on the page, and known word-for-word translations of English terms. Shown when something is found. |
 
 Click a row to scroll to it on the page; **‹ ›** step through the list. Each row shows:
 - **where the text is**: *button · Navigation “Main menu”*, *table cell · Table › “Projektgesundheitsübersicht”*, plus the text just before and after it;
@@ -78,7 +78,7 @@ Every row under **Unclear** has two buttons:
 The latest choice wins: marking an ignored text removes it from the ignore list, and the other way round.
 
 ### Ignore that learns
-Ignore remembers what the text looked like and where it was, and three similar Ignores make a rule:
+Ignore remembers what the text looked like, where it was and which language was checked, and three similar Ignores make a rule:
 - the same text ignored on two sites is ignored on all sites;
 - three texts of one narrow shape on a site ignore that shape there: codes (`SKU-1234`), versions (`v2.4.1`), abbreviations, BrandCase
   names (`HubSpot`), `@handles`, ™ names, identifiers (`user_name`);
@@ -88,18 +88,31 @@ Ignore remembers what the text looked like and where it was, and three similar I
 Broad shapes such as "a capitalised word" are never learned, because they would also hide real untranslated labels. The popup says what it
 learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
 
+A learned rule never decides on its own. **The language is checked first, always**: every text is judged like any other, and a rule only
+sets aside text the models could not place (unclear, or a possible name). Text read as the page's language counts as translated and is not
+listed at all; text read as another language (English, German…) stays a finding, whatever the rule says. Rules are also narrow:
+- a rule belongs to the target language it was learned for (*on this site (fr pages)*), and does nothing when another language is checked;
+- a slot matches the text's own element (or a bare `<b>`/`<span>` inside it), never a container further up;
+- a slot made only of layout classes (`span.text-sm`, `div.flex`, `button.btn`: Tailwind, Bootstrap and the like) is never learned, because it
+  covers most of a page. Such rules saved by older versions are dropped when the popup loads.
+
 ### Exports
-- **CSV**: one row per finding, untranslated, unclear and ignored items alike (each with its reason, so the export matches the coverage
+- **CSV**: one row per finding, untranslated, unclear (type *Needs review*) and ignored items alike (each with its reason, so the export matches the coverage
   count), with type, text, reason, detected language, model agreement, element type (*where*: tab, heading, table cell,
   badge, button, placeholder…), CSS selector, page, number of copies, context, surrounding text and every location. No field is left empty
   (*unknown* when no language could be named, *n/a* where a column doesn't apply) and no field contains a line break: several locations are
   separated by ` | `, one per copy in both *context* and *all locations*. Selectors are full paths from the nearest id (`#root > …`). For
   text you marked as untranslated, *reason* keeps the models' own reading too (*Marked untranslated by you; models: …*). Text alone in a table
   cell has the rest of its row as surrounding text, and its context names the column (*Table › column “Status”*).
-- **Report**: the same as a standalone HTML page to share, with a picture of each finding (*On the page*): cropped from a screenshot of
+- **Report**: the same as a standalone HTML page to share, in sections: **Findings** (untranslated and broken text), **Needs review**
+  (unclear text, models that disagree, and warnings hidden by *Confirmed warnings only*), **Format and wording hints**, and last, collapsed,
+  **Skipped** with a count per reason (names, codes, numbers with units, your ignore list…). The header counts them apart:
+  *2 findings · 3 to review · 98 skipped*. The same place is listed once. Each finding has a picture (*On the page*): cropped from a screenshot of
   the page and boxed in its colour (red for untranslated, orange for unclear), with the rows around it for context. The page is scrolled to
   each finding in turn and put back where it was; Chrome allows two screenshots a second, so pictures are taken for the first 40 findings.
-  A finding that isn't visible (hidden, or in a closed menu or tab) says so instead. No pictures for PDFs.
+  A finding that isn't visible (hidden, or in a closed menu or tab) says so instead. No pictures for PDFs or for skipped rows.
+  Before exporting, the page is brought up to date: text that changed since the check (an app that swapped in its translations later) is
+  checked again, and the text around every row is read again in the same moment, so the text, its context and the pictures match.
 - **Ignore & marked lists** (Settings): export and import as JSON, including learned rules and marked texts, to share them with your team.
 
 ## Settings
@@ -124,15 +137,23 @@ learned, with **Undo**. *Learn from Ignore* in Settings switches learning off.
 ## How detection works
 
 ### Three models vote
-1. **Rules first.** Numbers, dates, durations, versions, URLs, e-mail addresses, codes, model and brand names are set aside before
-   anything is judged.
-2. **tinyld** proposes a verdict. **CLD3** (Google's detector, as WebAssembly) and **franc** vote independently. A model abstains only when
+1. **A stable page.** The check starts once the page has stopped changing for 0.4 s (at most 3 s), so an app that is still rendering or
+   swapping in its translations is not read half in one state and half in the other.
+2. **Rules first.** Numbers, dates, durations, versions, URLs, e-mail addresses, codes, model and brand names are set aside before
+   anything is judged. Each says why: *Number with a unit or abbreviation (“pt.”)*, *Code, number or ID*, *Name of this site or app* (from
+   `og:site_name`, or a part of the page title that is also the logo's alt text: "Arena — AI Role Play Platform" with a logo "arena").
+3. **tinyld** proposes a verdict. **CLD3** (Google's detector, as WebAssembly) and **franc** vote independently. A model abstains only when
    it has no guess at all; an unconfident but correct guess still counts.
-3. **Two models agreeing decides.** Two that read the target language clear the text; two that name the same other language flag it.
+4. **Two models agreeing decides.** Two that read the target language clear the text; two that name the same other language flag it.
    Close relatives count as one answer (CLD3's "Norwegian" agrees with tinyld's "Danish"). A model that abstains or names an unrelated
    language is asked again head-to-head: *the target, or the page's source language?* That answer only backs up the dictionary and never
    counts as agreement on its own.
-4. **Page-level evidence** comes last: the sentence around a short string, the section a lone word or two-word label sits in, the page's source-language
+5. **Easier to raise a flag than to clear one.** Text tinyld reads as the target language is checked by CLD3 and franc too. On a full
+   phrase (three words or more), one model that confidently reads English (with English words in it) or a language found elsewhere on the
+   page sends it to **Unclear** as *Needs review*, with who said what; two such models make it untranslated. A short label of long words
+   ("Gezielte Informationsabfrage" on a French page) goes to review when CLD3 and franc both read another language and not all its words
+   are words of the target language. The same holds when two models read the target and the third confidently disagrees.
+6. **Page-level evidence** comes last: the sentence around a short string, the section a lone word or two-word label sits in, the page's source-language
    version, and (in Balanced mode) the page as a whole for very short strings.
 
 ### Dictionaries and letters
@@ -205,6 +226,18 @@ product name: when two models read it as English and at least one of its words i
 (*English interface label*) without needing a manual mark. The same phrase in a table cell or a card title is still judged as a possible
 name (*Name or title?*).
 
+### Wording hints
+Some problems are in text that *is* in the target language. Two are found without any model and listed under **Format** (never in the score):
+- **one label written two ways** on the same page: "Manuel de l'utilisateur" on the button and "Manuel utilisateur" in its tooltip (the same
+  words in the same order, with different little words between them; capitals alone don't count);
+- **known word-for-word translations** of English business terms, with what is usually said instead: "points de douleur" (*pain points*),
+  "établissement de rapport" (*rapport building*: "rapport" means "report" in French), "définition de l'agenda" (*agenda setting*),
+  "communication exécutive", German "Schmerzpunkte", Spanish "puntos de dolor". The list is short on purpose: only phrases that are wrong.
+
+This is not a review of translation quality: whether a translation says the right thing needs the source text and a translation model, and
+nothing leaves the browser. Comparing against the app's own language files is not supported either; *Compare with source language* uses
+the page's English version when the page links one (`hreflang`).
+
 ### Technical terms
 Terms that stay in English in every interface (REST API, API, URL, JSON, OAuth, SSO, Webhook, SDK, GraphQL…) are set aside like codes and
 counted under *skipped*, never listed as unclear. Add your own with **Ignore**.
@@ -263,7 +296,7 @@ Local `file://` PDFs need **Allow access to file URLs** on the extension's detai
 | `popup.html`, `panel.html`, `popup.js`, `popup.css` | Popup and side panel (same code; `panel.html` is generated). |
 | `learn.js` | Ignore-list learning, built from `src/learn.js`. |
 | `pdfcheck.js`, `vendor/` | PDF reader (pdf.js, Apache-2.0). |
-| `src/` | Sources: `engine.js` (tinyld and rules), `verify.js` (CLD3/franc voting), `english.js` and `wordlists.js` (dictionaries), `names.js` and `namelists.js` (names), `context.js` (where text sits), `status.js` (status values and badges), `mask.js` (with the technical-term list), `rules.js`, `guard.js`, `scripts.js`, `alphabet.js`, `dates.js`. |
+| `src/` | Sources: `engine.js` (tinyld and rules), `verify.js` (CLD3/franc voting), `english.js` and `wordlists.js` (dictionaries), `names.js` and `namelists.js` (names), `context.js` (where text sits), `status.js` (status values and badges), `mask.js` (with the technical-term list), `rules.js`, `wording.js` (wording hints), `guard.js`, `scripts.js`, `alphabet.js`, `dates.js`. |
 | `scripts/` | `build.mjs` (esbuild bundle) and `wordlists.mjs` (generates `src/wordlists.js`). |
 | `test/` | Unit tests (Node + jsdom) and `test/e2e/` (Playwright in a real Chrome, with test pages in `test/e2e/site/`). |
 

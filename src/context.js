@@ -3,6 +3,7 @@
 // (e.g. `span.user-name`) used to learn ignore rules from repeated Ignore clicks. Read-only: nothing on the page is changed.
 
 import { isBadge } from './status.js';
+import { utilityClass } from './learn.js';
 
 const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
 const cut = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
@@ -159,7 +160,9 @@ export function slotOf(el) {
     }
   }
   const cls = [...(el.classList || [])].filter((c) => c.length >= 3 && c.length <= 32 && !HASHY.test(c) && /^[a-z][\w-]*$/i.test(c));
-  return cls.length ? el.tagName.toLowerCase() + cls.slice(0, 2).map((c) => '.' + c).join('') : '';
+  // classes that name the slot (`user-name`) before layout classes (`text-sm`, `flex`): a slot of layout classes alone is never learned from
+  const named = [...cls.filter((c) => !utilityClass(c)), ...cls.filter((c) => utilityClass(c))];
+  return named.length ? el.tagName.toLowerCase() + named.slice(0, 2).map((c) => '.' + c).join('') : '';
 }
 
 /**
